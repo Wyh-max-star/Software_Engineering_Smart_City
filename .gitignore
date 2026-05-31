@@ -1,0 +1,14 @@
+.idea/
+.vscode/
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+
+# Local archives and Blender backup files should not be committed.
+*.zip
+*.blend1
+
+# OS/editor noise.
+.DS_Store
+Thumbs.db
