@@ -1,0 +1,23 @@
+{
+  "textures": [
+    {
+      "id": "road_clean_custom_01",
+      "name": "Custom Clean Road",
+      "category": "road_texture",
+      "path": "assets/Assets/Default/textures/Road 4 clean_BaseColor.jpg",
+      "usage": "road_material",
+      "license": "Existing iCity classroom project asset"
+    }
+  ],
+  "objects": [
+    {
+      "id": "street_lamp_custom_01",
+      "name": "Street Lamp Demo",
+      "category": "street_furniture",
+      "path": "assets/Assets/Default/Road/Road assets.blend",
+      "object_name": "Light1_Light_ICity_Default",
+      "usage": "roadside_asset",
+      "license": "Existing iCity classroom project asset"
+    }
+  ]
+}
