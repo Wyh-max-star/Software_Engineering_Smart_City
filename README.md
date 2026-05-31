@@ -34,3 +34,14 @@ git lfs pull
 
 - 资产、交通人群、生态元素计划：`docs/superpowers/plans/2026-05-31-smart-city-assets-traffic-ecology.md`
 - `add111` 合入评估：`docs/add111-integration-assessment.md`
+- 资产扩充面板说明：`iCity/smart_city/docs/README_ASSET.md`
+- 生态水域与交通人群面板说明：`iCity/smart_city/docs/README_ECOLOGY.md`
+
+## 当前扩展面板
+
+`add111` 的功能模块已按规范化文件名合入 `iCity/smart_city/`，并通过 `iCity/__init__.py` 进行最小接线。
+
+- `ICity Asset Expansion`：道路/步道材质替换、程序化路灯生成与清理。
+- `ICity Ecology`：地形、湖泊、河流、船只、车辆、人群、路径动画生成与清理。
+
+合入时没有复制 `add111/__init__(1).py`，避免覆盖 iCity 原始入口文件。

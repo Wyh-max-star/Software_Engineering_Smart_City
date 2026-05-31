@@ -30,6 +30,11 @@ import bpy.utils.previews
 import os
 from bpy.app.handlers import persistent
 
+try:
+    from .smart_city import asset_extension, ecology_extension
+except ImportError:
+    from smart_city import asset_extension, ecology_extension
+
 
 addon_keymaps = {}
 _icons = None
@@ -3425,6 +3430,8 @@ def register():
     bpy.utils.register_class(SNA_OT_Landscape_Filter_0Bf89)
     bpy.utils.register_class(SNA_OT_Filter_Street_Assets_C5C0E)
     bpy.utils.register_class(SNA_PT_ICITY_EDITOR_6D34D)
+    ecology_extension.register()
+    asset_extension.register()
     kc = bpy.context.window_manager.keyconfigs.addon
     km = kc.keymaps.new(name='Window', space_type='EMPTY')
     kmi = km.keymap_items.new('sna.open_addon_prefrences_34afe', 'M', 'PRESS',
@@ -3434,6 +3441,8 @@ def register():
 
 def unregister():
     global _icons
+    asset_extension.unregister()
+    ecology_extension.unregister()
     bpy.utils.previews.remove(_icons)
     wm = bpy.context.window_manager
     kc = wm.keyconfigs.addon

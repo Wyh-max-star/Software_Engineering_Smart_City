@@ -4,6 +4,8 @@
 
 `E:\Users\Eric\Desktop\2026Spring\Software_Engineering\finalwork\add111` can be added to this project, but it should not be copied into the repository exactly as-is.
 
+Current status: this folder has now been merged locally using the controlled path described in this document.
+
 Recommended decision:
 
 - Use `add111` as a feature implementation source.
@@ -183,6 +185,8 @@ This avoids throwing away the tested registry foundation.
 
 ## Recommended Integration Plan
 
+The following plan has been applied locally. Keep it here as the decision record for future review and team handoff.
+
 ### Step 1: Normalize File Names
 
 Copy these files into `iCity/smart_city/`:
@@ -278,7 +282,7 @@ After code integration, update:
 
 ## Final Recommendation
 
-Add it, but in a controlled merge.
+Add it, but in a controlled merge. This recommendation has been applied locally.
 
 The best integration strategy is:
 
@@ -290,3 +294,33 @@ The best integration strategy is:
 6. Verify in Blender before claiming the feature is complete.
 
 This gives the project a large functional jump while keeping the merge reviewable and reducing the chance of breaking the original iCity plugin.
+
+## Local Merge Result
+
+Files copied and normalized:
+
+```text
+iCity/smart_city/asset_extension.py
+iCity/smart_city/ecology_common.py
+iCity/smart_city/ecology_extension.py
+iCity/smart_city/ecology_traffic.py
+iCity/smart_city/ecology_water.py
+iCity/smart_city/docs/README_ASSET.md
+iCity/smart_city/docs/README_ECOLOGY.md
+```
+
+Files intentionally not copied:
+
+```text
+add111/__init__(1).py
+```
+
+Current `iCity/__init__.py` only imports and registers the extension modules from `iCity.smart_city`.
+
+One adaptation was required after moving files into `iCity/smart_city/`:
+
+- `asset_extension.py` now resolves the iCity addon root as the parent directory of `smart_city`, so existing textures continue to load from `iCity/assets/textures`.
+
+Remaining runtime requirement:
+
+- Open Blender and verify the new panels appear and execute correctly. Static Python checks cannot prove `bpy` UI behavior.

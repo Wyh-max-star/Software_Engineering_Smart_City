@@ -48,7 +48,7 @@ The work is successful when the team can demonstrate all of the following in Ble
 
 The iCity plugin base has been imported into the `zmk` branch. Keep new extension code isolated under `iCity/smart_city/` and avoid rewriting the generated-style iCity core file.
 
-`add111` has been reviewed as a candidate implementation source for asset expansion, traffic/crowd, and ecology. See `docs/add111-integration-assessment.md` for the full decision record. The short decision is: use the feature modules, normalize file names, and do not overwrite `iCity/__init__.py`.
+`add111` has been reviewed and merged locally as the implementation source for asset expansion, traffic/crowd, and ecology. See `docs/add111-integration-assessment.md` for the full decision record. The short decision is: use the feature modules, normalize file names, and do not overwrite `iCity/__init__.py`.
 
 Use this target structure:
 
