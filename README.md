@@ -29,3 +29,8 @@ git lfs pull
 3. 选择 `Install...`，安装本仓库中的 `iCity` 插件目录或打包后的插件压缩包。
 4. 启用 `ICity` 插件。
 5. 在 Blender 侧边栏中使用 iCity 原有功能和 `smart_city` 扩展功能。
+
+## 文档索引
+
+- 资产、交通人群、生态元素计划：`docs/superpowers/plans/2026-05-31-smart-city-assets-traffic-ecology.md`
+- `add111` 合入评估：`docs/add111-integration-assessment.md`

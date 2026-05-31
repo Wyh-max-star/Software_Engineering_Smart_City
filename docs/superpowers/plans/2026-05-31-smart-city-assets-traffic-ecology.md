@@ -46,7 +46,11 @@ The work is successful when the team can demonstrate all of the following in Ble
 
 ## 3. Recommended File Structure
 
-The current branch is almost empty. After the iCity plugin is imported, use this target structure:
+The iCity plugin base has been imported into the `zmk` branch. Keep new extension code isolated under `iCity/smart_city/` and avoid rewriting the generated-style iCity core file.
+
+`add111` has been reviewed as a candidate implementation source for asset expansion, traffic/crowd, and ecology. See `docs/add111-integration-assessment.md` for the full decision record. The short decision is: use the feature modules, normalize file names, and do not overwrite `iCity/__init__.py`.
+
+Use this target structure:
 
 ```text
 Software_Engineering_Smart_City/
@@ -57,8 +61,11 @@ Software_Engineering_Smart_City/
     smart_city/
       __init__.py
       asset_registry.py
-      traffic_simulation.py
-      ecology_elements.py
+      asset_extension.py
+      ecology_common.py
+      ecology_extension.py
+      ecology_traffic.py
+      ecology_water.py
       ui_panels.py
       demo_runner.py
       manifests/
@@ -72,8 +79,11 @@ Software_Engineering_Smart_City/
 File responsibilities:
 
 - `iCity/smart_city/asset_registry.py`: load and validate resource metadata, append Blender objects, create/reuse materials.
-- `iCity/smart_city/traffic_simulation.py`: spawn cars and pedestrians, generate simple paths, attach animation keyframes.
-- `iCity/smart_city/ecology_elements.py`: generate terrain mesh, water plane/river strip, boat object, and boat path animation.
+- `iCity/smart_city/asset_extension.py`: provide the Blender panel and operators for 2D material replacement and procedural streetlight generation.
+- `iCity/smart_city/ecology_common.py`: shared collection, material, mesh, layout, and animation helpers for ecology and traffic.
+- `iCity/smart_city/ecology_extension.py`: provide the Blender panel, settings, and top-level operators for ecology and traffic/crowd generation.
+- `iCity/smart_city/ecology_traffic.py`: spawn cars and pedestrians, generate simple paths, attach animation keyframes.
+- `iCity/smart_city/ecology_water.py`: generate terrain mesh, water/lake/river geometry, boat objects, and boat path animation.
 - `iCity/smart_city/ui_panels.py`: add Blender UI buttons and parameter fields for the three modules.
 - `iCity/smart_city/demo_runner.py`: provide one-click demo scene setup for recording.
 - `iCity/smart_city/manifests/asset_manifest.json`: list custom textures, models, preview images, categories, and license notes.
@@ -303,6 +313,8 @@ Target result: the team has enough evidence for the software engineering report 
 
 - Do not rewrite the original iCity core in the first development pass.
 - New feature code should live under `iCity/smart_city/`.
+- Use `add111` as an implementation source, but normalize file names before copying.
+- Do not copy `add111/__init__(1).py` over `iCity/__init__.py`; extract only minimal import/register/unregister wiring.
 - Existing iCity UI can call new operators, but the new modules should remain independently testable.
 - JSON manifests should use relative paths so the plugin works after being zipped and submitted.
 - Every imported external asset must include license or credit notes in the manifest and report.
@@ -351,4 +363,3 @@ This workstream is done when:
 - The full demo can be generated without editing code.
 - The tester has completed the demo checklist.
 - The project report includes screenshots, test records, implementation notes, and contribution notes for these three modules.
-
