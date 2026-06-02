@@ -104,6 +104,13 @@ def texture_directory() -> Path:
     return addon_directory() / "assets" / "textures"
 
 
+def texture_directories() -> tuple[Path, ...]:
+    return (
+        texture_directory(),
+        addon_directory() / "assets" / "Assets" / "Default" / "textures",
+    )
+
+
 def icon_hint_path() -> str:
     return str(addon_directory() / "assets" / "icons" / ICON_LIBRARY_SENTINEL)
 
@@ -111,8 +118,16 @@ def icon_hint_path() -> str:
 def get_texture_path(filename: str) -> Path | None:
     if not filename:
         return None
-    path = texture_directory() / filename
-    return path if path.exists() else None
+    for directory in texture_directories():
+        path = directory / filename
+        if path.exists():
+            return path
+        stem = Path(filename).stem
+        suffix = Path(filename).suffix
+        matches = sorted(directory.glob(f"{stem}*{suffix}"))
+        if matches:
+            return matches[0]
+    return None
 
 
 def load_image(filepath: Path | None, colorspace: str) -> bpy.types.Image | None:
@@ -386,6 +401,7 @@ def assign_material_to_object_data(
             materials[index] = material
     else:
         materials[0] = material
+    obj.update_tag(refresh={"DATA"})
     return True
 
 
@@ -808,6 +824,9 @@ class ICITY_OT_ApplySurfaceAsset(Operator):
 
         if settings.surface_target_mode == "ROAD_SYSTEM":
             assigned = assign_material_to_road_system(material, settings.surface_slot)
+            if assigned:
+                for obj in discover_surface_targets(context, "AUTO_DISCOVERY"):
+                    assign_material_to_object_data(obj, material, settings.replace_all_slots)
             if not assigned:
                 targets = discover_surface_targets(context, "AUTO_DISCOVERY")
                 if not targets:

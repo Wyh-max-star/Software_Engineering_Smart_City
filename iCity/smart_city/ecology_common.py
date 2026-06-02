@@ -316,6 +316,43 @@ def add_cycles_modifier(action: bpy.types.Action | None) -> None:
         modifier.mode_after = "REPEAT"
 
 
+def _sample_path_point(path_points: list[Vector], offset_factor: float) -> Vector:
+    if not path_points:
+        return Vector((0.0, 0.0, 0.0))
+    point_count = len(path_points)
+    position = (offset_factor % 1.0) * point_count
+    base_index = int(math.floor(position)) % point_count
+    next_index = (base_index + 1) % point_count
+    blend = position - math.floor(position)
+    return path_points[base_index] * (1.0 - blend) + path_points[next_index] * blend
+
+
+def keyframe_path_motion(
+    carrier: bpy.types.Object,
+    path_points: list[Vector],
+    terrain_origin: Vector,
+    frame_start: int,
+    frame_end: int,
+    phase_start: float,
+    sample_count: int = 16,
+) -> None:
+    frame_span = max(frame_end - frame_start, 1)
+    total_samples = max(sample_count, 4)
+    carrier.rotation_mode = "XYZ"
+    for sample_index in range(total_samples + 1):
+        factor = sample_index / total_samples
+        frame = int(round(frame_start + frame_span * factor))
+        point = _sample_path_point(path_points, phase_start + factor)
+        next_point = _sample_path_point(path_points, phase_start + factor + (1.0 / (total_samples * 4.0)))
+        delta = next_point - point
+        carrier.location = terrain_origin + point
+        carrier.rotation_euler = (0.0, 0.0, math.atan2(delta.y, delta.x))
+        carrier.keyframe_insert(data_path="location", frame=frame)
+        carrier.keyframe_insert(data_path="rotation_euler", frame=frame)
+    set_linear_interpolation(carrier.animation_data.action if carrier.animation_data else None)
+    add_cycles_modifier(carrier.animation_data.action if carrier.animation_data else None)
+
+
 def create_follow_path(
     name: str,
     path_points: list[Vector],
@@ -362,18 +399,19 @@ def create_follower(
     carrier.hide_select = True
     collection.objects.link(carrier)
 
-    follow = carrier.constraints.new(type="FOLLOW_PATH")
-    follow.target = path_obj
-    follow.use_fixed_location = True
-    follow.use_curve_follow = True
-    follow.forward_axis = "FORWARD_X"
-    follow.up_axis = "UP_Z"
-    follow.offset_factor = phase_start
-    follow.keyframe_insert(data_path="offset_factor", frame=frame_start)
-    follow.offset_factor = phase_start + 1.0
-    follow.keyframe_insert(data_path="offset_factor", frame=frame_end)
-    set_linear_interpolation(carrier.animation_data.action if carrier.animation_data else None)
-    add_cycles_modifier(carrier.animation_data.action if carrier.animation_data else None)
+    path_points_world = [
+        Vector((point.co.x, point.co.y, point.co.z))
+        for point in path_obj.data.splines[0].points
+    ]
+    keyframe_path_motion(
+        carrier,
+        path_points_world,
+        path_obj.location,
+        frame_start,
+        frame_end,
+        phase_start,
+        sample_count=max(12, len(path_points_world)),
+    )
 
     obj = create_mesh_object(name, mesh_vertices, mesh_faces, collection, Vector((0.0, 0.0, 0.0)), material)
     obj.parent = carrier
@@ -400,23 +438,27 @@ def compute_layout(center: Vector, city_radius: float, ground_z: float, settings
     side = Vector((-direction.y, direction.x))
 
     terrain_radius = city_radius + settings.terrain_margin
-    lake_center = (
-        direction * (city_radius + settings.lake_radius * 0.45)
-        + side * (settings.lake_radius * 0.18)
-    )
+    lake_radius_x = settings.lake_radius * 1.12
+    lake_radius_y = settings.lake_radius * 0.78
+    safe_buffer = max(6.0, min(settings.terrain_margin * 0.22, settings.lake_radius * 0.55))
+    lake_distance = city_radius + max(lake_radius_x, lake_radius_y) + safe_buffer
+    lake_center = direction * lake_distance + side * (settings.lake_radius * 0.18)
     lake_rotation = angle + math.pi * 0.35
 
     water_level = 0.08 - settings.lake_depth * 0.38
     terrain_origin = Vector((center.x, center.y, ground_z - 0.25))
 
-    river_start = lake_center + direction * (settings.lake_radius * 0.68)
+    river_start = lake_center + direction * (settings.lake_radius * 0.78)
+    river_outer_distance = max(terrain_radius * 0.94, lake_distance + settings.lake_radius * 1.35)
     river_points = [
         river_start,
-        river_start + direction * (terrain_radius * 0.18) + side * (terrain_radius * 0.05),
-        direction * (terrain_radius * 0.56) + side * (terrain_radius * 0.10),
-        direction * (terrain_radius * 0.94),
+        river_start + direction * (settings.lake_radius * 0.70) + side * (settings.river_width * 0.75),
+        direction * (river_outer_distance * 0.78) + side * (settings.river_width * 1.8),
+        direction * river_outer_distance,
     ]
-    traffic_center = -direction * (city_radius + settings.terrain_margin * 0.34) - side * (settings.terrain_margin * 0.06)
+    traffic_outer = max(settings.traffic_loop_radius_x, settings.traffic_loop_radius_y) + settings.road_width * 0.5
+    traffic_distance = city_radius + traffic_outer + max(4.0, safe_buffer * 0.72)
+    traffic_center = -direction * traffic_distance - side * (settings.terrain_margin * 0.06)
     traffic_rotation = angle + math.pi * 0.08
     crowd_center = lake_center
 
@@ -427,11 +469,12 @@ def compute_layout(center: Vector, city_radius: float, ground_z: float, settings
         "terrain_radius": terrain_radius,
         "lake_center": lake_center,
         "lake_rotation": lake_rotation,
-        "lake_radius_x": settings.lake_radius * 1.12,
-        "lake_radius_y": settings.lake_radius * 0.78,
+        "lake_radius_x": lake_radius_x,
+        "lake_radius_y": lake_radius_y,
         "water_level": water_level,
         "direction": direction,
         "side": side,
+        "city_safe_radius": city_radius + safe_buffer,
         "river_points": river_points,
         "traffic_center": traffic_center,
         "traffic_rotation": traffic_rotation,

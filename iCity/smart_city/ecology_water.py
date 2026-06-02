@@ -20,6 +20,7 @@ try:
         evaluate_noise,
         evaluate_turbulence,
         get_or_create_material,
+        keyframe_path_motion,
         rotate_2d,
         rotate_2d_inverse,
         set_linear_interpolation,
@@ -38,6 +39,7 @@ except ImportError:
         evaluate_noise,
         evaluate_turbulence,
         get_or_create_material,
+        keyframe_path_motion,
         rotate_2d,
         rotate_2d_inverse,
         set_linear_interpolation,
@@ -172,8 +174,12 @@ def terrain_height(local_point: Vector, layout: dict, settings) -> float:
     distance_from_center = local_point.length
     terrain_radius = layout["terrain_radius"]
     city_radius = layout["city_radius"]
+    city_safe_radius = layout.get("city_safe_radius", city_radius)
 
-    edge_factor = smoothstep(city_radius * 0.92, terrain_radius, distance_from_center)
+    if distance_from_center <= city_safe_radius:
+        return -0.04
+
+    edge_factor = smoothstep(city_safe_radius, terrain_radius, distance_from_center)
     ridge_noise = evaluate_noise(local_point, settings.seed, 0.018, octaves=5)
     ridge_noise = 0.5 + ridge_noise * 0.5
     detail_noise = evaluate_turbulence(local_point, settings.seed + 9, 0.05, octaves=4)
@@ -370,18 +376,15 @@ def create_boat_animation(
     carrier.hide_select = True
     collection.objects.link(carrier)
 
-    follow = carrier.constraints.new(type="FOLLOW_PATH")
-    follow.target = path_obj
-    follow.use_fixed_location = True
-    follow.use_curve_follow = True
-    follow.forward_axis = "FORWARD_X"
-    follow.up_axis = "UP_Z"
-    follow.offset_factor = 0.0
-    follow.keyframe_insert(data_path="offset_factor", frame=settings.animation_start)
-    follow.offset_factor = 1.0
-    follow.keyframe_insert(data_path="offset_factor", frame=settings.animation_end)
-    set_linear_interpolation(carrier.animation_data.action if carrier.animation_data else None)
-    add_cycles_modifier(carrier.animation_data.action if carrier.animation_data else None)
+    keyframe_path_motion(
+        carrier,
+        route_points,
+        path_obj.location,
+        settings.animation_start,
+        settings.animation_end,
+        0.0,
+        sample_count=max(12, len(route_points)),
+    )
 
     boat_vertices, boat_faces = build_boat_mesh(scale)
     boat_obj = create_mesh_object(
