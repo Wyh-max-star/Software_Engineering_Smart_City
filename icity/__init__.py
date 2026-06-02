@@ -30,27 +30,30 @@ import bpy.utils.previews
 import os
 from bpy.app.handlers import persistent
 
-if "ecology_extension" in locals() or "asset_extension" in locals():
+if "ecology_extension" in locals():
+    # Re-enabling the add-on. Reload EVERY submodule in dependency order so that
+    # edits to ecology_common / ecology_water take effect on a simple
+    # disable+enable. Reloading only ecology_extension would leave the
+    # already-cached helper modules running their old code.
     import importlib
-    if "ecology_extension" in locals():
-        importlib.reload(ecology_extension)
-    else:
-        try:
-            from . import ecology_extension
-        except ImportError:
-            import ecology_extension
-    if "asset_extension" in locals():
-        importlib.reload(asset_extension)
-    else:
-        try:
-            from . import asset_extension
-        except ImportError:
-            import asset_extension
+    import sys
+
+    for _submodule_name in (
+        "ecology_common",
+        "ecology_water",
+        "ecology_extension",
+    ):
+        _submodule = sys.modules.get(f"{__name__}.{_submodule_name}") or sys.modules.get(_submodule_name)
+        if _submodule is not None:
+            importlib.reload(_submodule)
+    try:
+        from . import ecology_extension
+    except ImportError:
+        import ecology_extension
 else:
     try:
-        from . import asset_extension, ecology_extension
+        from . import ecology_extension
     except ImportError:
-        import asset_extension
         import ecology_extension
 
 
@@ -3449,7 +3452,6 @@ def register():
     bpy.utils.register_class(SNA_OT_Filter_Street_Assets_C5C0E)
     bpy.utils.register_class(SNA_PT_ICITY_EDITOR_6D34D)
     ecology_extension.register()
-    asset_extension.register()
     kc = bpy.context.window_manager.keyconfigs.addon
     km = kc.keymaps.new(name='Window', space_type='EMPTY')
     kmi = km.keymap_items.new('sna.open_addon_prefrences_34afe', 'M', 'PRESS',
@@ -3557,5 +3559,4 @@ def unregister():
     bpy.utils.unregister_class(SNA_OT_Landscape_Filter_0Bf89)
     bpy.utils.unregister_class(SNA_OT_Filter_Street_Assets_C5C0E)
     bpy.utils.unregister_class(SNA_PT_ICITY_EDITOR_6D34D)
-    asset_extension.unregister()
     ecology_extension.unregister()

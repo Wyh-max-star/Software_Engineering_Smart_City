@@ -299,18 +299,42 @@ def create_strip_from_closed_points(
     return create_mesh_object(name, vertices, faces, collection, location, material)
 
 
-def set_linear_interpolation(action: bpy.types.Action | None) -> None:
+def iter_action_fcurves(action: bpy.types.Action | None):
+    """Yield every F-Curve of an action across Blender versions.
+
+    Blender 4.4+ moved to layered/slotted actions and removed the flat
+    ``action.fcurves`` attribute (accessing it raises AttributeError). There the
+    curves live under ``action.layers[].strips[].channelbags[].fcurves``. Older
+    Blender keeps the flat ``action.fcurves`` collection. This helper supports
+    both so the animation post-processing never crashes mid-generation.
+    """
     if action is None:
         return
-    for fcurve in action.fcurves:
+
+    legacy_fcurves = getattr(action, "fcurves", None)
+    if legacy_fcurves is not None:
+        for fcurve in legacy_fcurves:
+            yield fcurve
+        return
+
+    for layer in getattr(action, "layers", []):
+        for strip in getattr(layer, "strips", []):
+            channelbags = getattr(strip, "channelbags", None)
+            if channelbags is None:
+                continue
+            for channelbag in channelbags:
+                for fcurve in getattr(channelbag, "fcurves", []):
+                    yield fcurve
+
+
+def set_linear_interpolation(action: bpy.types.Action | None) -> None:
+    for fcurve in iter_action_fcurves(action):
         for keyframe in fcurve.keyframe_points:
             keyframe.interpolation = "LINEAR"
 
 
 def add_cycles_modifier(action: bpy.types.Action | None) -> None:
-    if action is None:
-        return
-    for fcurve in action.fcurves:
+    for fcurve in iter_action_fcurves(action):
         modifier = fcurve.modifiers.new(type="CYCLES")
         modifier.mode_before = "REPEAT"
         modifier.mode_after = "REPEAT"
