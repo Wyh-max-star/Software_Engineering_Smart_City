@@ -10,6 +10,10 @@
 
 ---
 
+## Phase 2 Follow-up
+
+See `docs/superpowers/plans/2026-06-02-smart-city-visibility-placement-assets-plan.md` for the follow-up plan covering placement stabilization, visibility validation, and the second asset expansion batch.
+
 ## 1. Background and Scope
 
 This plan targets the three currently prioritized assignment areas:

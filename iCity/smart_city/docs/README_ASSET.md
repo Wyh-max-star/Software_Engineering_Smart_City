@@ -140,7 +140,7 @@
 
 ### 生成位置
 
-路灯会沿城市外围批量布置，依据当前城市范围自动计算分布。
+路灯和 roadside 资产现在都使用独立生成方式，只在城市外围安全带中布置，不再直接改写原始 `ICity Road` / `Road 2` 的路侧资产插槽。
 
 生成后的对象会被放到单独的集合里：
 
@@ -205,13 +205,13 @@
 2. 点击：
    - `Generate Streetlights`
 
-### 清理路灯
+### 清理生成资产
 
 点击：
 
 - `Clear`
 
-只会清理这个模块生成的路灯集合，不会删除原始 ICity 场景。
+会清理这个模块生成的路灯和 roadside 资产，以及对应的扩展挂接；不会删除原始 ICity 城市场景。
 
 
 ## merge 建议
@@ -265,10 +265,20 @@
 ## 当前未能本地确认的内容
 
 - Blender 4.1 真机界面点击结果
-- 原始 `Road 2` 节点组在你老师给的环境里是否完全同名
+- 原始城市中的默认路灯和道路节点组不应该被这个扩展清空或改写
 
 如果目标环境里原始道路节点命名有变化，也不用推倒重来，改 `asset_extension.py` 里的常量即可：
 
 - `ICITY_ROAD_NODE_GROUP`
 - `ICITY_ROAD_OBJECT`
 - `ICITY_MATERIAL_LIBRARY_OBJECT`
+
+## Phase 2 Placement Note
+
+The current phase-2 placement behavior is road-system-first for supported 3D assets:
+
+- `Streetlight` uses standalone perimeter placement
+- `Bench` uses standalone perimeter placement
+- `Bollard` uses standalone perimeter placement
+
+If those original iCity sockets are unavailable in the running Blender scene, the extension falls back to the previous outer-band placement logic instead of failing.

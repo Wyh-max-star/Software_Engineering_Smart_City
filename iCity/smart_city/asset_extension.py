@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import math
 from pathlib import Path
+from types import SimpleNamespace
 
 import bpy
 from bpy.props import BoolProperty, EnumProperty, FloatProperty, IntProperty, PointerProperty
@@ -19,6 +20,7 @@ ICITY_MATERIAL_LIBRARY_OBJECT = "ICity_Materials"
 
 ASSET_ROOT_COLLECTION = "ICity Asset Expansion"
 ASSET_STREETLIGHT_COLLECTION = "ICity Asset Streetlights"
+ASSET_ROADSIDE_COLLECTION = "ICity Roadside Props"
 
 STREETLIGHT_MESH_NAME = "ICITY_ASSET_Streetlight_Mesh"
 STREETLIGHT_METAL_MATERIAL = "ICITY_ASSET_Streetlight_Metal"
@@ -83,9 +85,100 @@ DIRECT_SURFACE_KEYWORDS = (
     "asphalt",
 )
 
+ROADSIDE_ASSET_LIBRARY = {
+    "PLANTER": {
+        "label": "Planter Box",
+        "mesh_name": "ICITY_ASSET_Planter_Mesh",
+        "material_name": "ICITY_ASSET_Planter_Material",
+        "color": (0.46, 0.33, 0.24, 1.0),
+    },
+    "BOLLARD": {
+        "label": "Bollard Cluster",
+        "mesh_name": "ICITY_ASSET_Bollard_Mesh",
+        "material_name": "ICITY_ASSET_Bollard_Material",
+        "color": (0.18, 0.19, 0.21, 1.0),
+    },
+    "BENCH": {
+        "label": "Bench Variant",
+        "mesh_name": "ICITY_ASSET_Bench_Mesh",
+        "material_name": "ICITY_ASSET_Bench_Material",
+        "color": (0.52, 0.39, 0.24, 1.0),
+    },
+    "BUS_STOP": {
+        "label": "Bus Stop Sign",
+        "mesh_name": "ICITY_ASSET_BusStop_Mesh",
+        "material_name": "ICITY_ASSET_BusStop_Material",
+        "color": (0.14, 0.39, 0.69, 1.0),
+    },
+}
+
+ROAD_ASSET_NODE_SPECS = {
+    "STREETLIGHT": {
+        "node_name": "Light",
+        "placement_mode": "OBJECT",
+        "asset_input_index": 4,
+        "spacing_input_index": 10,
+        "lateral_offset_input_index": 11,
+        "depth_offset_input_index": 12,
+        "visibility_inputs": ("Light V", "Light R"),
+    },
+    "BENCH": {
+        "node_name": "Bench",
+        "placement_mode": "OBJECT",
+        "asset_input_index": 4,
+        "spacing_input_index": 10,
+        "lateral_offset_input_index": 11,
+        "depth_offset_input_index": 12,
+        "visibility_inputs": ("Bench V", "Bench R"),
+    },
+    "BOLLARD": {
+        "node_name": "Bollard",
+        "placement_mode": "OBJECT",
+        "asset_input_index": 4,
+        "spacing_input_index": 10,
+        "lateral_offset_input_index": 11,
+        "depth_offset_input_index": 12,
+        "visibility_inputs": ("Bollard V", "Bollard R"),
+    },
+}
+
 
 def clamp(value: float, minimum: float, maximum: float) -> float:
     return max(minimum, min(maximum, value))
+
+
+def road_asset_spec_for_style(style_key: str) -> dict | None:
+    return ROAD_ASSET_NODE_SPECS.get(style_key)
+
+
+def road_asset_node_available(node_group, spec: dict | None) -> bool:
+    if node_group is None or spec is None:
+        return False
+    nodes = getattr(node_group, "nodes", None)
+    if nodes is None:
+        return False
+    node = nodes.get(spec["node_name"])
+    if node is None:
+        return False
+
+    required_indexes = [spec["asset_input_index"]]
+    for key in ("spacing_input_index", "lateral_offset_input_index", "depth_offset_input_index"):
+        index = spec.get(key)
+        if index is not None:
+            required_indexes.append(index)
+    return len(getattr(node, "inputs", [])) > max(required_indexes)
+
+
+def road_asset_styles_for_scope(scope: str, roadside_style: str | None = None) -> tuple[str, ...]:
+    if scope == "STREETLIGHT":
+        return ("STREETLIGHT",)
+    if scope != "ROADSIDE":
+        return tuple()
+    if roadside_style in {"BENCH", "BOLLARD"}:
+        return (roadside_style,)
+    if roadside_style in {None, "MIXED"}:
+        return ("BENCH", "BOLLARD")
+    return tuple()
 
 
 def ensure_principled_input(node: bpy.types.Node, socket_names, value) -> None:
@@ -146,6 +239,24 @@ def get_or_create_material(name: str) -> bpy.types.Material:
     if material is None:
         material = bpy.data.materials.new(name=name)
     material.use_nodes = True
+    return material
+
+
+def build_flat_material(name: str, color: tuple[float, float, float, float], *, metallic: float = 0.0, roughness: float = 0.55) -> bpy.types.Material:
+    material = get_or_create_material(name)
+    nodes = material.node_tree.nodes
+    links = material.node_tree.links
+    nodes.clear()
+
+    output = nodes.new("ShaderNodeOutputMaterial")
+    output.location = (240, 0)
+
+    bsdf = nodes.new("ShaderNodeBsdfPrincipled")
+    bsdf.location = (20, 0)
+    bsdf.inputs["Base Color"].default_value = color
+    ensure_principled_input(bsdf, ("Metallic",), metallic)
+    ensure_principled_input(bsdf, ("Roughness",), roughness)
+    links.new(bsdf.outputs["BSDF"], output.inputs["Surface"])
     return material
 
 
@@ -525,8 +636,8 @@ def remove_collection_recursive(collection: bpy.types.Collection) -> None:
     bpy.data.collections.remove(collection)
 
 
-def clear_streetlights() -> None:
-    collection = bpy.data.collections.get(ASSET_ROOT_COLLECTION)
+def clear_collection_contents(collection_name: str) -> None:
+    collection = bpy.data.collections.get(collection_name)
     if collection is not None:
         remove_collection_recursive(collection)
 
@@ -536,6 +647,181 @@ def get_asset_root_collection() -> bpy.types.Collection:
     if root is None:
         root = bpy.context.scene.collection
     return get_or_create_child_collection(root, ASSET_ROOT_COLLECTION)
+
+
+def get_road_node_group():
+    return bpy.data.node_groups.get(ICITY_ROAD_NODE_GROUP)
+
+
+def get_road_object():
+    return bpy.data.objects.get(ICITY_ROAD_OBJECT)
+
+
+def get_road_geometry_nodes_modifier():
+    road_object = get_road_object()
+    if road_object is None:
+        return None
+    for modifier in getattr(road_object, "modifiers", []):
+        if modifier.type != "NODES":
+            continue
+        if modifier.node_group is None:
+            continue
+        if modifier.node_group.name == ICITY_ROAD_NODE_GROUP:
+            return modifier
+    return None
+
+
+def set_modifier_interface_bool(modifier, input_name: str, value: bool) -> bool:
+    if modifier is None or modifier.node_group is None:
+        return False
+    items_tree = getattr(modifier.node_group.interface, "items_tree", None)
+    if items_tree is None:
+        return False
+    interface_item = items_tree.get(input_name)
+    if interface_item is None:
+        return False
+    modifier[interface_item.identifier] = value
+    return True
+
+
+def enable_road_asset_visibility(spec: dict | None) -> None:
+    if spec is None:
+        return
+    modifier = get_road_geometry_nodes_modifier()
+    if modifier is None:
+        return
+    for input_name in spec.get("visibility_inputs", ()):
+        set_modifier_interface_bool(modifier, input_name, True)
+
+
+def clear_road_asset_assignments() -> None:
+    clear_scoped_road_asset_assignments(tuple(ROAD_ASSET_NODE_SPECS.keys()))
+
+
+def clear_scoped_road_asset_assignments(style_keys: tuple[str, ...]) -> None:
+    node_group = get_road_node_group()
+    if node_group is None:
+        return
+    for style_key in style_keys:
+        spec = road_asset_spec_for_style(style_key)
+        if spec is None:
+            continue
+        node = node_group.nodes.get(spec["node_name"])
+        if node is None or len(node.inputs) <= spec["asset_input_index"]:
+            continue
+        node.inputs[spec["asset_input_index"]].default_value = None
+    road_object = get_road_object()
+    if road_object is not None:
+        road_object.update_tag(refresh={"DATA"})
+
+
+def clear_streetlights() -> None:
+    clear_collection_contents(ASSET_STREETLIGHT_COLLECTION)
+
+
+def clear_roadside_assets(roadside_style: str | None = None) -> None:
+    clear_collection_contents(ASSET_ROADSIDE_COLLECTION)
+
+
+def estimated_spacing_from_count(radius: float, count: int, minimum: float) -> float:
+    safe_radius = max(radius, 1.0)
+    safe_count = max(count, 1)
+    return max(minimum, (2.0 * math.pi * safe_radius) / safe_count)
+
+
+def estimated_lateral_offset(user_offset: float, minimum: float, maximum: float) -> float:
+    return clamp(user_offset * 0.25, minimum, maximum)
+
+
+def configure_road_asset_node(node, spec: dict, asset_value, spacing: float, lateral_offset: float, depth_offset: float) -> None:
+    node.inputs[spec["asset_input_index"]].default_value = asset_value
+    node.inputs[spec["spacing_input_index"]].default_value = spacing
+    node.inputs[spec["lateral_offset_input_index"]].default_value = lateral_offset
+    node.inputs[spec["depth_offset_input_index"]].default_value = depth_offset
+
+
+def create_streetlight_source_object(collection: bpy.types.Collection, mesh: bpy.types.Mesh, settings) -> bpy.types.Object:
+    obj = bpy.data.objects.new("ICITY_ASSET_Streetlight_Source", mesh)
+    obj.location = (0.0, 0.0, 0.0)
+    obj.hide_viewport = True
+    obj.hide_render = True
+    collection.objects.link(obj)
+
+    bevel = obj.modifiers.new(name="ICITY_ASSET_Bevel", type="BEVEL")
+    bevel.width = 0.02
+    bevel.segments = 2
+
+    light_data = bpy.data.lights.new(name="ICITY_ASSET_Streetlight_Source_Light", type="POINT")
+    light_data.energy = settings.streetlight_light_power
+    light_data.shadow_soft_size = 0.45
+    light_data.color = (1.0, 0.88, 0.72)
+    light_object = bpy.data.objects.new(light_data.name, light_data)
+    light_object.parent = obj
+    light_object.location = (settings.streetlight_arm_length - 0.08, 0.0, settings.streetlight_height - 0.34)
+    light_object.hide_viewport = True
+    light_object.hide_render = True
+    collection.objects.link(light_object)
+    return obj
+
+
+def try_generate_streetlights_on_road_system(collection: bpy.types.Collection, radius: float, settings) -> bool:
+    spec = road_asset_spec_for_style("STREETLIGHT")
+    node_group = get_road_node_group()
+    if not road_asset_node_available(node_group, spec):
+        return False
+
+    metal_material, emission_material = build_streetlight_materials(settings)
+    mesh = build_streetlight_mesh(settings)
+    mesh.materials.clear()
+    mesh.materials.append(metal_material)
+    mesh.materials.append(emission_material)
+    source_object = create_streetlight_source_object(collection, mesh, settings)
+
+    node = node_group.nodes.get(spec["node_name"])
+    spacing = estimated_spacing_from_count(radius, settings.streetlight_count, 6.0)
+    lateral_offset = estimated_lateral_offset(settings.streetlight_offset, 0.8, 4.0)
+    configure_road_asset_node(
+        node,
+        spec,
+        source_object,
+        spacing,
+        lateral_offset,
+        settings.streetlight_base_z_offset,
+    )
+    enable_road_asset_visibility(spec)
+
+    road_object = get_road_object()
+    if road_object is not None:
+        road_object.update_tag(refresh={"DATA"})
+    return True
+
+
+def try_generate_roadside_assets_on_road_system(collection: bpy.types.Collection, style_key: str, radius: float, settings) -> bool:
+    spec = road_asset_spec_for_style(style_key)
+    node_group = get_road_node_group()
+    if not road_asset_node_available(node_group, spec):
+        return False
+
+    mesh = _build_roadside_prop_mesh(style_key)
+    mesh.materials.clear()
+    mesh.materials.append(build_roadside_prop_material(style_key))
+    source_object = bpy.data.objects.new(f"ICITY_ASSET_{style_key}_Source", mesh)
+    source_object.location = (0.0, 0.0, 0.0)
+    source_object.hide_viewport = True
+    source_object.hide_render = True
+    source_object.scale = (settings.roadside_asset_scale, settings.roadside_asset_scale, settings.roadside_asset_scale)
+    collection.objects.link(source_object)
+
+    node = node_group.nodes.get(spec["node_name"])
+    spacing = estimated_spacing_from_count(radius, settings.roadside_asset_count, 4.0)
+    lateral_offset = estimated_lateral_offset(settings.roadside_asset_offset, 0.4, 3.0)
+    configure_road_asset_node(node, spec, source_object, spacing, lateral_offset, 0.0)
+    enable_road_asset_visibility(spec)
+
+    road_object = get_road_object()
+    if road_object is not None:
+        road_object.update_tag(refresh={"DATA"})
+    return True
 
 
 def append_box(
@@ -659,19 +945,20 @@ def create_streetlight_instance(
     collection.objects.link(light_object)
 
 
-def perimeter_positions(center: Vector, radius: float, settings) -> list[tuple[Vector, float]]:
-    half_x = radius + settings.streetlight_offset
-    half_y = radius * 0.72 + settings.streetlight_offset
-    half_y = max(half_y, radius * 0.48)
+def point_in_city_core(point: Vector, center: Vector, radius: float) -> bool:
+    local_x = abs(point.x - center.x)
+    local_y = abs(point.y - center.y)
+    return local_x < radius * 0.78 and local_y < radius * 0.58
 
+
+def _perimeter_positions(center: Vector, half_x: float, half_y: float, count: int, base_z: float) -> list[tuple[Vector, float]]:
     width = half_x * 2.0
     depth = half_y * 2.0
     perimeter = (width + depth) * 2.0
-    count = max(1, settings.streetlight_count)
-    spacing = perimeter / count
+    spacing = perimeter / max(1, count)
     positions = []
 
-    for index in range(count):
+    for index in range(max(1, count)):
         distance = index * spacing
         if distance < width:
             x = center.x - half_x + distance
@@ -689,8 +976,133 @@ def perimeter_positions(center: Vector, radius: float, settings) -> list[tuple[V
             x = center.x - half_x
             y = center.y + half_y - (distance - width - depth - width)
             rotation = 0.0
-        positions.append((Vector((x, y, settings.streetlight_base_z_offset)), rotation))
+        positions.append((Vector((x, y, base_z)), rotation))
     return positions
+
+
+def perimeter_positions(center: Vector, radius: float, settings) -> list[tuple[Vector, float]]:
+    lateral_offset = max(settings.streetlight_offset * 0.55, radius * 0.10)
+    half_x = radius + max(settings.streetlight_offset, radius * 0.12)
+    half_y = max(radius * 0.72 + settings.streetlight_offset, radius + lateral_offset)
+    return _perimeter_positions(
+        center,
+        half_x,
+        half_y,
+        max(1, settings.streetlight_count),
+        settings.streetlight_base_z_offset,
+    )
+
+
+def _downsample_positions(positions: list[tuple[Vector, float]], count: int) -> list[tuple[Vector, float]]:
+    if len(positions) <= count:
+        return positions
+    sampled = []
+    for index in range(count):
+        sample_index = int(round(index * (len(positions) - 1) / max(1, count - 1)))
+        sampled.append(positions[sample_index])
+    return sampled
+
+
+def filtered_perimeter_positions(center: Vector, radius: float, settings) -> list[tuple[Vector, float]]:
+    candidate_count = max(settings.streetlight_count * 3, 24)
+    candidate_offset = max(settings.streetlight_offset, radius * 0.18)
+    candidate_half_x = radius + candidate_offset
+    candidate_half_y = max(radius * 0.84 + candidate_offset, radius + candidate_offset * 0.62)
+    candidates = _perimeter_positions(
+        center,
+        candidate_half_x,
+        candidate_half_y,
+        candidate_count,
+        settings.streetlight_base_z_offset,
+    )
+    filtered = [(point, rotation) for point, rotation in candidates if not point_in_city_core(point, center, radius)]
+    if len(filtered) < settings.streetlight_count:
+        filtered = perimeter_positions(center, radius, settings)
+    return _downsample_positions(filtered, max(1, settings.streetlight_count))
+
+
+def streetlight_positions_with_fallback(
+    center: Vector,
+    radius: float,
+    settings,
+    *,
+    anchor_candidates: list[tuple[Vector, float]] | None = None,
+    road_node_supported: bool = False,
+) -> list[tuple[Vector, float]]:
+    if road_node_supported and anchor_candidates:
+        return _downsample_positions(anchor_candidates, max(1, settings.streetlight_count))
+    return filtered_perimeter_positions(center, radius, settings)
+
+
+def roadside_prop_positions(center: Vector, radius: float, settings) -> list[tuple[Vector, float]]:
+    proxy = SimpleNamespace(
+        streetlight_offset=max(settings.roadside_asset_offset + radius * 0.12, radius * 0.32),
+        streetlight_count=settings.roadside_asset_count,
+        streetlight_base_z_offset=0.0,
+    )
+    return filtered_perimeter_positions(center, radius, proxy)
+
+
+def build_roadside_prop_material(style_key: str) -> bpy.types.Material:
+    config = ROADSIDE_ASSET_LIBRARY[style_key]
+    metallic = 0.0 if style_key in {"PLANTER", "BENCH"} else 0.18
+    roughness = 0.62 if style_key == "PLANTER" else 0.48
+    return build_flat_material(config["material_name"], config["color"], metallic=metallic, roughness=roughness)
+
+
+def _build_roadside_prop_mesh(style_key: str) -> bpy.types.Mesh:
+    config = ROADSIDE_ASSET_LIBRARY[style_key]
+    existing = bpy.data.meshes.get(config["mesh_name"])
+    if existing is not None and existing.users == 0:
+        bpy.data.meshes.remove(existing)
+
+    mesh = bpy.data.meshes.new(config["mesh_name"])
+    vertices: list[tuple[float, float, float]] = []
+    face_data: list[tuple[tuple[int, ...], int]] = []
+
+    if style_key == "PLANTER":
+        append_box(vertices, face_data, (-0.62, -0.24, 0.0), (0.62, 0.24, 0.52), 0)
+        append_box(vertices, face_data, (-0.48, -0.14, 0.52), (0.48, 0.14, 0.86), 0)
+    elif style_key == "BOLLARD":
+        for x in (-0.32, 0.0, 0.32):
+            append_box(vertices, face_data, (x - 0.06, -0.06, 0.0), (x + 0.06, 0.06, 0.88), 0)
+    elif style_key == "BENCH":
+        append_box(vertices, face_data, (-0.68, -0.18, 0.46), (0.68, 0.18, 0.60), 0)
+        append_box(vertices, face_data, (-0.68, 0.12, 0.60), (0.68, 0.24, 1.02), 0)
+        for x in (-0.46, 0.46):
+            append_box(vertices, face_data, (x - 0.05, -0.14, 0.0), (x + 0.05, 0.14, 0.46), 0)
+    else:
+        append_box(vertices, face_data, (-0.06, -0.06, 0.0), (0.06, 0.06, 1.56), 0)
+        append_box(vertices, face_data, (-0.50, -0.08, 1.18), (0.50, 0.08, 1.32), 0)
+        append_box(vertices, face_data, (0.18, -0.28, 0.70), (0.56, -0.12, 1.22), 0)
+
+    mesh.from_pydata(vertices, [], [face for face, _ in face_data])
+    mesh.update()
+    for polygon, (_, material_index) in zip(mesh.polygons, face_data):
+        polygon.material_index = material_index
+    return mesh
+
+
+def create_roadside_prop_instance(
+    collection: bpy.types.Collection,
+    mesh: bpy.types.Mesh,
+    location: Vector,
+    rotation_z: float,
+    index: int,
+    style_key: str,
+    scale: float,
+) -> None:
+    obj = bpy.data.objects.new(f"ICITY_ASSET_{style_key}_{index:03d}", mesh)
+    obj.location = location
+    obj.rotation_euler = (0.0, 0.0, rotation_z)
+    obj.scale = (scale, scale, scale)
+    collection.objects.link(obj)
+
+
+def roadside_style_keys(settings) -> list[str]:
+    if settings.roadside_asset_style == "MIXED":
+        return list(ROADSIDE_ASSET_LIBRARY.keys())
+    return [settings.roadside_asset_style]
 
 
 class ICITY_AssetSettings(PropertyGroup):
@@ -802,6 +1214,39 @@ class ICITY_AssetSettings(PropertyGroup):
         min=-5.0,
         max=20.0,
     )
+    roadside_asset_style: EnumProperty(
+        name="Roadside Style",
+        description="Roadside support asset style",
+        items=[
+            ("MIXED", "Mixed", "Generate a mixed batch of roadside assets"),
+            ("PLANTER", "Planter Box", "Generate planter boxes"),
+            ("BOLLARD", "Bollard Cluster", "Generate bollard clusters"),
+            ("BENCH", "Bench Variant", "Generate benches"),
+            ("BUS_STOP", "Bus Stop Sign", "Generate bus stop signs"),
+        ],
+        default="MIXED",
+    )
+    roadside_asset_count: IntProperty(
+        name="Roadside Count",
+        description="Number of roadside support assets to place",
+        default=12,
+        min=4,
+        max=80,
+    )
+    roadside_asset_offset: FloatProperty(
+        name="Roadside Offset",
+        description="Distance from the city edge to roadside support assets",
+        default=5.5,
+        min=1.0,
+        max=40.0,
+    )
+    roadside_asset_scale: FloatProperty(
+        name="Roadside Scale",
+        description="Unified scale applied to generated roadside support assets",
+        default=1.0,
+        min=0.4,
+        max=3.0,
+    )
 
 
 class ICITY_OT_ApplySurfaceAsset(Operator):
@@ -888,7 +1333,7 @@ class ICITY_OT_GenerateStreetlights(Operator):
         mesh.materials.append(metal_material)
         mesh.materials.append(emission_material)
 
-        positions = perimeter_positions(center, radius, settings)
+        positions = filtered_perimeter_positions(center, radius, settings)
         for index, (location, rotation) in enumerate(positions):
             create_streetlight_instance(
                 light_collection,
@@ -903,15 +1348,65 @@ class ICITY_OT_GenerateStreetlights(Operator):
         return {"FINISHED"}
 
 
+class ICITY_OT_GenerateRoadsideAssets(Operator):
+    bl_idname = "icity.generate_roadside_assets"
+    bl_label = "Generate Roadside Props"
+    bl_description = "Generate procedural roadside support assets around the city edge"
+    bl_options = {"REGISTER", "UNDO"}
+
+    @classmethod
+    def poll(cls, context):
+        return bpy.data.collections.get(ICITY_ROOT_COLLECTION) is not None or bpy.context.scene is not None
+
+    def execute(self, context):
+        settings = context.scene.icity_asset_settings
+        asset_root = get_asset_root_collection()
+        clear_roadside_assets(settings.roadside_asset_style)
+        roadside_collection = get_or_create_child_collection(asset_root, ASSET_ROADSIDE_COLLECTION)
+        center, radius, ground_z = get_city_bounds()
+
+        positions = roadside_prop_positions(center, radius, settings)
+        style_keys = roadside_style_keys(settings)
+        if not positions:
+            self.report({"ERROR"}, "No valid roadside prop positions were found.")
+            return {"CANCELLED"}
+
+        meshes = {}
+        for style_key in style_keys:
+            mesh = _build_roadside_prop_mesh(style_key)
+            mesh.materials.clear()
+            mesh.materials.append(build_roadside_prop_material(style_key))
+            meshes[style_key] = mesh
+
+        for index, (location, rotation) in enumerate(positions):
+            style_key = style_keys[index % len(style_keys)]
+            create_roadside_prop_instance(
+                roadside_collection,
+                meshes[style_key],
+                Vector((location.x, location.y, ground_z)),
+                rotation,
+                index,
+                style_key,
+                settings.roadside_asset_scale,
+            )
+
+        self.report({"INFO"}, f"Generated {len(positions)} roadside support assets.")
+        return {"FINISHED"}
+
+
 class ICITY_OT_ClearAssetExpansion(Operator):
     bl_idname = "icity.clear_asset_expansion"
-    bl_label = "Clear Streetlights"
-    bl_description = "清除当前扩展生成的路灯资产"
+    bl_label = "Clear Generated Assets"
+    bl_description = "Clear generated smart city streetlights and roadside props"
     bl_options = {"REGISTER", "UNDO"}
 
     def execute(self, context):
         clear_streetlights()
-        self.report({"INFO"}, "已清理资产扩充模块生成的路灯内容。")
+        clear_roadside_assets()
+        asset_root = bpy.data.collections.get(ASSET_ROOT_COLLECTION)
+        if asset_root is not None and len(asset_root.children) == 0 and len(asset_root.objects) == 0:
+            remove_collection_recursive(asset_root)
+        self.report({"INFO"}, "Cleared generated streetlight and roadside assets.")
         return {"FINISHED"}
 
 
@@ -962,11 +1457,20 @@ class ICITY_PT_AssetExpansionPanel(Panel):
         row.operator("icity.generate_streetlights", text="Generate Streetlights", icon="LIGHT_POINT")
         row.operator("icity.clear_asset_expansion", text="Clear", icon="TRASH")
 
+        roadside_box = layout.box()
+        roadside_box.label(text="Roadside Support Assets", icon="OUTLINER_OB_EMPTY")
+        roadside_box.prop(settings, "roadside_asset_style")
+        roadside_box.prop(settings, "roadside_asset_count")
+        roadside_box.prop(settings, "roadside_asset_offset")
+        roadside_box.prop(settings, "roadside_asset_scale")
+        roadside_box.operator("icity.generate_roadside_assets", text="Generate Roadside Props", icon="ASSET_MANAGER")
+
 
 CLASSES = (
     ICITY_AssetSettings,
     ICITY_OT_ApplySurfaceAsset,
     ICITY_OT_GenerateStreetlights,
+    ICITY_OT_GenerateRoadsideAssets,
     ICITY_OT_ClearAssetExpansion,
     ICITY_PT_AssetExpansionPanel,
 )

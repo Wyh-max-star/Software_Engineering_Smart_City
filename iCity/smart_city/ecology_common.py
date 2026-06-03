@@ -16,6 +16,7 @@ ECOLOGY_COLLECTION = "ICity Ecology"
 ECOLOGY_TERRAIN_COLLECTION = "ICity Ecology Terrain"
 ECOLOGY_WATER_COLLECTION = "ICity Ecology Water"
 ECOLOGY_BOAT_COLLECTION = "ICity Ecology Boats"
+ECOLOGY_ASSET_COLLECTION = "ICity Ecology Assets"
 ECOLOGY_TRAFFIC_COLLECTION = "ICity Ecology Traffic"
 ECOLOGY_CROWD_COLLECTION = "ICity Ecology Crowd"
 ECOLOGY_PATH_COLLECTION = "ICity Ecology Paths"
@@ -266,6 +267,112 @@ def ellipse_points(
         world = center + rotate_2d(local, rotation)
         points.append(Vector((world.x, world.y, z)))
     return points
+
+
+def normalize_2d(vector: Vector) -> Vector:
+    length = math.sqrt(vector.x * vector.x + vector.y * vector.y)
+    if length == 0.0:
+        return Vector((1.0, 0.0))
+    return Vector((vector.x / length, vector.y / length))
+
+
+def ellipse_boundary_point(
+    center: Vector,
+    radius_x: float,
+    radius_y: float,
+    rotation: float,
+    direction: Vector,
+    *,
+    offset: float = 0.0,
+    z: float = 0.0,
+) -> Vector:
+    center_2d = Vector((center.x, center.y))
+    direction_2d = normalize_2d(direction)
+    local_direction = rotate_2d_inverse(direction_2d, rotation)
+    safe_radius_x = max(radius_x, 0.001)
+    safe_radius_y = max(radius_y, 0.001)
+    denominator = math.sqrt(
+        (local_direction.x / safe_radius_x) ** 2
+        + (local_direction.y / safe_radius_y) ** 2
+    )
+    if denominator == 0.0:
+        base_point = center_2d.copy()
+    else:
+        scale = 1.0 / denominator
+        local_point = Vector((local_direction.x * scale, local_direction.y * scale))
+        base_point = center_2d + rotate_2d(local_point, rotation)
+    point = base_point + direction_2d * offset
+    return Vector((point.x, point.y, z))
+
+
+def compute_ecology_asset_anchors(layout: dict, settings) -> dict:
+    lake_center = layout["lake_center"]
+    shore_direction = normalize_2d(-layout["direction"])
+    side = normalize_2d(layout["side"])
+
+    dock_direction = normalize_2d(shore_direction + side * 0.18)
+    dock_shore = ellipse_boundary_point(
+        lake_center,
+        layout["lake_radius_x"],
+        layout["lake_radius_y"],
+        layout["lake_rotation"],
+        dock_direction,
+        z=layout["water_level"],
+    )
+    dock_pullback = max(min(layout["lake_radius_x"], layout["lake_radius_y"]) * 0.18, 1.6)
+    dock_center = Vector(
+        (
+            dock_shore.x - dock_direction.x * dock_pullback,
+            dock_shore.y - dock_direction.y * dock_pullback,
+            dock_shore.z,
+        )
+    )
+    dock_rotation = math.atan2((-dock_direction).y, (-dock_direction).x)
+
+    tree_offset = max(settings.lake_radius * 0.18, 3.2)
+    shrub_offset = max(settings.lake_radius * 0.11, 1.8)
+    tree_directions = [
+        normalize_2d(shore_direction + side * 0.92),
+        normalize_2d(shore_direction + side * 0.42),
+        normalize_2d(shore_direction - side * 0.42),
+        normalize_2d(shore_direction - side * 0.92),
+    ]
+    shrub_directions = [
+        normalize_2d(shore_direction + side * 0.70),
+        normalize_2d(shore_direction + side * 0.28),
+        shore_direction,
+        normalize_2d(shore_direction - side * 0.28),
+        normalize_2d(shore_direction - side * 0.70),
+    ]
+
+    tree_points = [
+        ellipse_boundary_point(
+            lake_center,
+            layout["lake_radius_x"],
+            layout["lake_radius_y"],
+            layout["lake_rotation"],
+            direction,
+            offset=tree_offset,
+        )
+        for direction in tree_directions
+    ]
+    shrub_points = [
+        ellipse_boundary_point(
+            lake_center,
+            layout["lake_radius_x"],
+            layout["lake_radius_y"],
+            layout["lake_rotation"],
+            direction,
+            offset=shrub_offset,
+        )
+        for direction in shrub_directions
+    ]
+    return {
+        "dock_center": dock_center,
+        "dock_rotation": dock_rotation,
+        "tree_points": tree_points,
+        "shrub_points": shrub_points,
+    }
 
 
 def create_strip_from_closed_points(

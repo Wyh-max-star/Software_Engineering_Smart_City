@@ -24,6 +24,7 @@ else:
 ECOLOGY_BOAT_COLLECTION = ecology_common.ECOLOGY_BOAT_COLLECTION
 ECOLOGY_COLLECTION = ecology_common.ECOLOGY_COLLECTION
 ECOLOGY_CROWD_COLLECTION = ecology_common.ECOLOGY_CROWD_COLLECTION
+ECOLOGY_ASSET_COLLECTION = ecology_common.ECOLOGY_ASSET_COLLECTION
 ECOLOGY_PATH_COLLECTION = ecology_common.ECOLOGY_PATH_COLLECTION
 ECOLOGY_TERRAIN_COLLECTION = ecology_common.ECOLOGY_TERRAIN_COLLECTION
 ECOLOGY_TRAFFIC_COLLECTION = ecology_common.ECOLOGY_TRAFFIC_COLLECTION
@@ -45,6 +46,7 @@ def generate_ecology(context: bpy.types.Context) -> None:
     terrain_collection = ecology_common.get_or_create_child_collection(ecology_collection, ECOLOGY_TERRAIN_COLLECTION)
     water_collection = ecology_common.get_or_create_child_collection(ecology_collection, ECOLOGY_WATER_COLLECTION)
     boat_collection = ecology_common.get_or_create_child_collection(ecology_collection, ECOLOGY_BOAT_COLLECTION)
+    asset_collection = ecology_common.get_or_create_child_collection(ecology_collection, ECOLOGY_ASSET_COLLECTION)
     traffic_collection = ecology_common.get_or_create_child_collection(ecology_collection, ECOLOGY_TRAFFIC_COLLECTION)
     crowd_collection = ecology_common.get_or_create_child_collection(ecology_collection, ECOLOGY_CROWD_COLLECTION)
     path_collection = ecology_common.get_or_create_child_collection(ecology_collection, ECOLOGY_PATH_COLLECTION)
@@ -53,7 +55,14 @@ def generate_ecology(context: bpy.types.Context) -> None:
     layout = ecology_common.compute_layout(center, city_radius, ground_z, settings)
 
     if settings.enable_ecology_block:
-        ecology_water.generate_water_system(layout, settings, terrain_collection, water_collection, boat_collection)
+        ecology_water.generate_water_system(
+            layout,
+            settings,
+            terrain_collection,
+            water_collection,
+            boat_collection,
+            asset_collection,
+        )
     if settings.enable_traffic_block:
         ecology_traffic.generate_traffic_system(layout, settings, traffic_collection, crowd_collection, path_collection)
 

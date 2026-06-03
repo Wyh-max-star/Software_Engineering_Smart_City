@@ -103,6 +103,25 @@ class AssetRegistryTests(unittest.TestCase):
         with self.assertRaisesRegex(AssetRegistryError, "unknown object asset"):
             get_object_asset(manifest, "does_not_exist")
 
+    def test_validate_asset_paths_allows_procedural_assets(self):
+        manifest = {
+            "textures": [],
+            "objects": [
+                {
+                    "id": "procedural_planter",
+                    "name": "Procedural Planter",
+                    "category": "roadside_asset",
+                    "path": "procedural://planter_box_proc_01",
+                    "usage": "roadside_asset",
+                }
+            ],
+            "_addon_root": str(Path.cwd()),
+        }
+
+        issues = validate_asset_paths(manifest)
+
+        self.assertEqual(issues, [])
+
 
 if __name__ == "__main__":
     unittest.main()

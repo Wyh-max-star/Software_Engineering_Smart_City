@@ -51,6 +51,8 @@ def get_object_asset(manifest: dict[str, Any], asset_id: str) -> dict[str, Any]:
 def validate_asset_paths(manifest: dict[str, Any]) -> list[dict[str, str]]:
     issues: list[dict[str, str]] = []
     for asset in list(manifest.get("textures", [])) + list(manifest.get("objects", [])):
+        if is_procedural_asset(asset):
+            continue
         resolved_path = resolve_asset_path(manifest, asset)
         if not resolved_path.exists():
             issues.append(
@@ -70,6 +72,10 @@ def resolve_asset_path(manifest: dict[str, Any], asset: dict[str, Any]) -> Path:
     if raw_path.is_absolute():
         return raw_path
     return root / raw_path
+
+
+def is_procedural_asset(asset: dict[str, Any]) -> bool:
+    return str(asset.get("path", "")).startswith("procedural://")
 
 
 def apply_road_texture(
@@ -164,4 +170,3 @@ def _require_bpy() -> Any:
     except ModuleNotFoundError as exc:
         raise AssetRegistryError("Blender bpy module is required for this operation") from exc
     return bpy
-

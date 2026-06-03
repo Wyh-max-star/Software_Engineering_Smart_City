@@ -12,6 +12,18 @@
 
 - `ecology_extension.py`
 - `ecology_common.py`
+
+## 2026-06-03 Update
+
+- The ecology generation flow now also creates a dedicated collection: `ICity Ecology Assets`.
+- This collection currently contains three procedural lakefront asset types:
+  - `Dock Pier`
+  - `Tree Cluster`
+  - `Shrub Patch`
+- Placement is deterministic from the same layout seed used by the ecology block.
+- The asset anchors are computed in `ecology_common.py`.
+- The Blender mesh generation for these assets lives in `ecology_water.py`.
+- Validation steps are documented in `BLENDER_VALIDATION_PHASE2.md`.
 - `ecology_water.py`
 - `ecology_traffic.py`
 

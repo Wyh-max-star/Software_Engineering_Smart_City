@@ -13,6 +13,7 @@ try:
         add_subdivision_modifier,
         add_wave_modifier,
         clamp,
+        compute_ecology_asset_anchors,
         create_follow_path,
         create_mesh_object,
         distance_to_polyline,
@@ -32,6 +33,7 @@ except ImportError:
         add_subdivision_modifier,
         add_wave_modifier,
         clamp,
+        compute_ecology_asset_anchors,
         create_follow_path,
         create_mesh_object,
         distance_to_polyline,
@@ -54,6 +56,13 @@ RIVER_OBJECT_NAME = "ICITY_ECO_River"
 TERRAIN_MATERIAL_NAME = "ICITY_ECO_Terrain_Material"
 WATER_MATERIAL_NAME = "ICITY_ECO_Water_Material"
 BOAT_MATERIAL_NAME = "ICITY_ECO_Boat_Material"
+TREE_MATERIAL_NAME = "ICITY_ECO_Tree_Material"
+SHRUB_MATERIAL_NAME = "ICITY_ECO_Shrub_Material"
+DOCK_MATERIAL_NAME = "ICITY_ECO_Dock_Material"
+
+TREE_MESH_NAME = "ICITY_ECO_TreeCluster_Mesh"
+SHRUB_MESH_NAME = "ICITY_ECO_ShrubPatch_Mesh"
+DOCK_MESH_NAME = "ICITY_ECO_Dock_Mesh"
 
 
 def build_terrain_material() -> bpy.types.Material:
@@ -159,6 +168,187 @@ def build_boat_material() -> bpy.types.Material:
 
     links.new(bsdf.outputs["BSDF"], output.inputs["Surface"])
     return material
+
+
+def build_tree_material() -> bpy.types.Material:
+    material = get_or_create_material(TREE_MATERIAL_NAME)
+    nodes = material.node_tree.nodes
+    links = material.node_tree.links
+    nodes.clear()
+
+    output = nodes.new("ShaderNodeOutputMaterial")
+    output.location = (280, 0)
+
+    bsdf = nodes.new("ShaderNodeBsdfPrincipled")
+    bsdf.location = (80, 0)
+    bsdf.inputs["Base Color"].default_value = (0.14, 0.32, 0.13, 1.0)
+    ensure_principled_input(bsdf, ("Roughness",), 0.86)
+
+    links.new(bsdf.outputs["BSDF"], output.inputs["Surface"])
+    return material
+
+
+def build_shrub_material() -> bpy.types.Material:
+    material = get_or_create_material(SHRUB_MATERIAL_NAME)
+    nodes = material.node_tree.nodes
+    links = material.node_tree.links
+    nodes.clear()
+
+    output = nodes.new("ShaderNodeOutputMaterial")
+    output.location = (280, 0)
+
+    bsdf = nodes.new("ShaderNodeBsdfPrincipled")
+    bsdf.location = (80, 0)
+    bsdf.inputs["Base Color"].default_value = (0.26, 0.44, 0.16, 1.0)
+    ensure_principled_input(bsdf, ("Roughness",), 0.92)
+
+    links.new(bsdf.outputs["BSDF"], output.inputs["Surface"])
+    return material
+
+
+def build_dock_material() -> bpy.types.Material:
+    material = get_or_create_material(DOCK_MATERIAL_NAME)
+    nodes = material.node_tree.nodes
+    links = material.node_tree.links
+    nodes.clear()
+
+    output = nodes.new("ShaderNodeOutputMaterial")
+    output.location = (280, 0)
+
+    bsdf = nodes.new("ShaderNodeBsdfPrincipled")
+    bsdf.location = (80, 0)
+    bsdf.inputs["Base Color"].default_value = (0.45, 0.34, 0.21, 1.0)
+    ensure_principled_input(bsdf, ("Roughness",), 0.88)
+
+    links.new(bsdf.outputs["BSDF"], output.inputs["Surface"])
+    return material
+
+
+def append_box(
+    vertices: list[tuple[float, float, float]],
+    faces: list[tuple[int, int, int, int]],
+    min_corner: tuple[float, float, float],
+    max_corner: tuple[float, float, float],
+) -> None:
+    base_index = len(vertices)
+    x0, y0, z0 = min_corner
+    x1, y1, z1 = max_corner
+    vertices.extend(
+        [
+            (x0, y0, z0),
+            (x1, y0, z0),
+            (x1, y1, z0),
+            (x0, y1, z0),
+            (x0, y0, z1),
+            (x1, y0, z1),
+            (x1, y1, z1),
+            (x0, y1, z1),
+        ]
+    )
+    faces.extend(
+        [
+            (base_index + 0, base_index + 1, base_index + 2, base_index + 3),
+            (base_index + 4, base_index + 5, base_index + 6, base_index + 7),
+            (base_index + 0, base_index + 1, base_index + 5, base_index + 4),
+            (base_index + 1, base_index + 2, base_index + 6, base_index + 5),
+            (base_index + 2, base_index + 3, base_index + 7, base_index + 6),
+            (base_index + 3, base_index + 0, base_index + 4, base_index + 7),
+        ]
+    )
+
+
+def build_tree_cluster_mesh() -> bpy.types.Mesh:
+    existing = bpy.data.meshes.get(TREE_MESH_NAME)
+    if existing is not None and existing.users == 0:
+        bpy.data.meshes.remove(existing)
+
+    mesh = bpy.data.meshes.new(TREE_MESH_NAME)
+    vertices: list[tuple[float, float, float]] = []
+    faces: list[tuple[int, int, int, int]] = []
+    for x_offset, canopy_scale, height_scale in ((0.0, 1.0, 1.0), (-0.95, 0.72, 0.82), (0.95, 0.78, 0.88)):
+        append_box(vertices, faces, (x_offset - 0.10, -0.10, 0.0), (x_offset + 0.10, 0.10, 1.2 * height_scale))
+        append_box(
+            vertices,
+            faces,
+            (x_offset - 0.52 * canopy_scale, -0.46 * canopy_scale, 1.0 * height_scale),
+            (x_offset + 0.52 * canopy_scale, 0.46 * canopy_scale, 1.9 * height_scale),
+        )
+        append_box(
+            vertices,
+            faces,
+            (x_offset - 0.34 * canopy_scale, -0.30 * canopy_scale, 1.8 * height_scale),
+            (x_offset + 0.34 * canopy_scale, 0.30 * canopy_scale, 2.28 * height_scale),
+        )
+
+    mesh.from_pydata(vertices, [], faces)
+    mesh.update()
+    mesh.materials.append(build_tree_material())
+    return mesh
+
+
+def build_shrub_patch_mesh() -> bpy.types.Mesh:
+    existing = bpy.data.meshes.get(SHRUB_MESH_NAME)
+    if existing is not None and existing.users == 0:
+        bpy.data.meshes.remove(existing)
+
+    mesh = bpy.data.meshes.new(SHRUB_MESH_NAME)
+    vertices: list[tuple[float, float, float]] = []
+    faces: list[tuple[int, int, int, int]] = []
+    for x_offset, y_offset, scale in ((0.0, 0.0, 1.0), (-0.44, 0.16, 0.7), (0.42, -0.12, 0.78)):
+        append_box(
+            vertices,
+            faces,
+            (x_offset - 0.42 * scale, y_offset - 0.32 * scale, 0.0),
+            (x_offset + 0.42 * scale, y_offset + 0.32 * scale, 0.62 * scale),
+        )
+        append_box(
+            vertices,
+            faces,
+            (x_offset - 0.26 * scale, y_offset - 0.22 * scale, 0.62 * scale),
+            (x_offset + 0.26 * scale, y_offset + 0.22 * scale, 0.92 * scale),
+        )
+
+    mesh.from_pydata(vertices, [], faces)
+    mesh.update()
+    mesh.materials.append(build_shrub_material())
+    return mesh
+
+
+def build_dock_mesh() -> bpy.types.Mesh:
+    existing = bpy.data.meshes.get(DOCK_MESH_NAME)
+    if existing is not None and existing.users == 0:
+        bpy.data.meshes.remove(existing)
+
+    mesh = bpy.data.meshes.new(DOCK_MESH_NAME)
+    vertices: list[tuple[float, float, float]] = []
+    faces: list[tuple[int, int, int, int]] = []
+    append_box(vertices, faces, (-1.6, -0.72, 0.0), (1.6, 0.72, 0.16))
+    append_box(vertices, faces, (-1.56, -0.72, -0.68), (-1.34, -0.50, 0.0))
+    append_box(vertices, faces, (-1.56, 0.50, -0.68), (-1.34, 0.72, 0.0))
+    append_box(vertices, faces, (1.34, -0.72, -0.68), (1.56, -0.50, 0.0))
+    append_box(vertices, faces, (1.34, 0.50, -0.68), (1.56, 0.72, 0.0))
+    append_box(vertices, faces, (-0.92, -0.08, 0.16), (0.92, 0.08, 0.34))
+
+    mesh.from_pydata(vertices, [], faces)
+    mesh.update()
+    mesh.materials.append(build_dock_material())
+    return mesh
+
+
+def create_asset_instance(
+    name: str,
+    mesh: bpy.types.Mesh,
+    collection: bpy.types.Collection,
+    location: Vector,
+    rotation_z: float,
+    scale: float,
+) -> bpy.types.Object:
+    obj = bpy.data.objects.new(name, mesh)
+    obj.location = location
+    obj.rotation_euler = (0.0, 0.0, rotation_z)
+    obj.scale = (scale, scale, scale)
+    collection.objects.link(obj)
+    return obj
 
 
 def elliptical_distance(local_point: Vector, layout: dict) -> float:
@@ -414,15 +604,57 @@ def create_boats(layout: dict, settings, collection: bpy.types.Collection) -> No
         create_boat_animation(boat_index, layout, settings, collection)
 
 
+def create_ecology_assets(layout: dict, settings, collection: bpy.types.Collection) -> None:
+    anchors = compute_ecology_asset_anchors(layout, settings)
+    dock_mesh = build_dock_mesh()
+    tree_mesh = build_tree_cluster_mesh()
+    shrub_mesh = build_shrub_patch_mesh()
+
+    dock_center = anchors["dock_center"]
+    dock_location = layout["terrain_origin"] + Vector((dock_center.x, dock_center.y, layout["water_level"] + 0.05))
+    create_asset_instance(
+        "ICITY_ECO_Dock_01",
+        dock_mesh,
+        collection,
+        dock_location,
+        anchors["dock_rotation"],
+        1.0,
+    )
+
+    for index, point in enumerate(anchors["tree_points"], start=1):
+        ground_height = terrain_height(Vector((point.x, point.y)), layout, settings)
+        create_asset_instance(
+            f"ICITY_ECO_TreeCluster_{index:02d}",
+            tree_mesh,
+            collection,
+            layout["terrain_origin"] + Vector((point.x, point.y, ground_height + 0.04)),
+            math.radians((settings.seed * 19 + index * 37) % 360),
+            0.92 + (index % 3) * 0.09,
+        )
+
+    for index, point in enumerate(anchors["shrub_points"], start=1):
+        ground_height = terrain_height(Vector((point.x, point.y)), layout, settings)
+        create_asset_instance(
+            f"ICITY_ECO_ShrubPatch_{index:02d}",
+            shrub_mesh,
+            collection,
+            layout["terrain_origin"] + Vector((point.x, point.y, ground_height + 0.02)),
+            math.radians((settings.seed * 11 + index * 29) % 360),
+            0.88 + (index % 2) * 0.10,
+        )
+
+
 def generate_water_system(
     layout: dict,
     settings,
     terrain_collection: bpy.types.Collection,
     water_collection: bpy.types.Collection,
     boat_collection: bpy.types.Collection,
+    asset_collection: bpy.types.Collection,
 ) -> None:
     create_terrain(layout, settings, terrain_collection)
     create_lake(layout, settings, water_collection)
     if settings.generate_river:
         create_river(layout, settings, water_collection)
     create_boats(layout, settings, boat_collection)
+    create_ecology_assets(layout, settings, asset_collection)
