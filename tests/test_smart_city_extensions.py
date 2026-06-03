@@ -132,6 +132,77 @@ def serialize_positions(positions):
 
 
 class SmartCityExtensionTests(unittest.TestCase):
+    def test_traffic_layout_stays_outside_city_radius(self):
+        traffic_extension = load_module("traffic_extension_layout", "iCity/smart_city/traffic_extension.py")
+        settings = types.SimpleNamespace(
+            traffic_outer_offset=10.0,
+            traffic_lane_gap=2.4,
+            pedestrian_outer_gap=3.2,
+            pedestrian_lane_gap=1.6,
+        )
+
+        layout = traffic_extension.compute_traffic_layout(Vector((0.0, 0.0, 0.0)), 30.0, 0.0, settings)
+
+        self.assertGreaterEqual(layout["vehicle_lane_inner_x"], 40.0)
+        self.assertGreaterEqual(layout["vehicle_lane_inner_y"], 35.0)
+        self.assertGreater(layout["vehicle_lane_outer_x"], layout["vehicle_lane_inner_x"])
+        self.assertGreater(layout["pedestrian_lane_inner_x"], layout["vehicle_lane_outer_x"])
+
+    def test_vehicle_type_sequence_balances_car_taxi_bus(self):
+        traffic_extension = load_module("traffic_extension_vehicle_sequence", "iCity/smart_city/traffic_extension.py")
+        settings = types.SimpleNamespace(
+            car_count=4,
+            taxi_count=2,
+            bus_count=1,
+        )
+
+        sequence = traffic_extension.vehicle_type_sequence(settings)
+
+        self.assertEqual(len(sequence), 7)
+        self.assertEqual(sequence.count("CAR"), 4)
+        self.assertEqual(sequence.count("TAXI"), 2)
+        self.assertEqual(sequence.count("BUS"), 1)
+        self.assertEqual(sequence[0], "BUS")
+
+    def test_clear_traffic_module_only_removes_traffic_collections(self):
+        traffic_extension = load_module("traffic_extension_clear", "iCity/smart_city/traffic_extension.py")
+        calls = []
+
+        traffic_extension.remove_collection_recursive = lambda collection: calls.append(collection.name)
+        traffic_extension.bpy.data.collections = {
+            traffic_extension.TRAFFIC_ROOT_COLLECTION: types.SimpleNamespace(name=traffic_extension.TRAFFIC_ROOT_COLLECTION),
+            "ICity Ecology": types.SimpleNamespace(name="ICity Ecology"),
+        }
+
+        traffic_extension.clear_traffic_crowd()
+
+        self.assertEqual(calls, [traffic_extension.TRAFFIC_ROOT_COLLECTION])
+
+    def test_generate_traffic_module_rejects_invalid_frame_range(self):
+        traffic_extension = load_module("traffic_extension_invalid_frames", "iCity/smart_city/traffic_extension.py")
+        settings = types.SimpleNamespace(
+            animation_start=20,
+            animation_end=20,
+        )
+        context = types.SimpleNamespace(scene=types.SimpleNamespace(icity_traffic_settings=settings))
+        operator = traffic_extension.ICITY_OT_GenerateTrafficCrowd()
+        reports = []
+        operator.report = lambda level, message: reports.append((level, message))
+
+        result = operator.execute(context)
+
+        self.assertEqual(result, {"CANCELLED"})
+        self.assertTrue(any("End Frame" in message for _, message in reports))
+
+    def test_traffic_module_registers_panel_and_operators(self):
+        traffic_extension = load_module("traffic_extension_classes", "iCity/smart_city/traffic_extension.py")
+
+        class_names = [cls.__name__ for cls in traffic_extension.CLASSES]
+
+        self.assertIn("ICITY_OT_GenerateTrafficCrowd", class_names)
+        self.assertIn("ICITY_OT_ClearTrafficCrowd", class_names)
+        self.assertIn("ICITY_PT_TrafficCrowdPanel", class_names)
+
     def test_clear_streetlights_only_removes_generated_collection(self):
         asset_extension = load_module("asset_extension_clear_streetlights", "iCity/smart_city/asset_extension.py")
         calls = []
