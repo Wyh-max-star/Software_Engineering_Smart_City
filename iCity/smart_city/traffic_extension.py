@@ -26,6 +26,7 @@ else:
 
 
 ICITY_ROOT_COLLECTION = ecology_common.ICITY_ROOT_COLLECTION
+ICITY_BASE_OBJECT = ecology_common.ICITY_BASE_OBJECT
 remove_collection_recursive = ecology_common.remove_collection_recursive
 TRAFFIC_ROOT_COLLECTION = "ICity Traffic Crowd"
 TRAFFIC_VEHICLE_COLLECTION = "ICity Traffic Vehicles"
@@ -47,6 +48,135 @@ TRAFFIC_PEDESTRIAN_MATERIAL = "ICITY_TRAFFIC_Pedestrian_Material"
 
 def _clamp(value: float, minimum: float, maximum: float) -> float:
     return max(minimum, min(maximum, value))
+
+
+def _copy_vector(point: Vector) -> Vector:
+    return point.copy() if hasattr(point, "copy") else Vector((point.x, point.y, point.z))
+
+
+def _vector_equals(a: Vector, b: Vector) -> bool:
+    return a.x == b.x and a.y == b.y and a.z == b.z
+
+
+def extract_road_edge_chains(
+    vertices: list[Vector],
+    edge_vertex_indices: list[tuple[int, int]],
+    road_deleted_flags: list[bool],
+) -> list[list[Vector]]:
+    active_edges = [
+        edge_vertex_indices[index]
+        for index in range(min(len(edge_vertex_indices), len(road_deleted_flags)))
+        if not road_deleted_flags[index]
+    ]
+    if not active_edges:
+        return []
+
+    adjacency: dict[int, list[tuple[int, int]]] = {}
+    for edge_index, (start, end) in enumerate(active_edges):
+        adjacency.setdefault(start, []).append((edge_index, end))
+        adjacency.setdefault(end, []).append((edge_index, start))
+
+    visited_edges: set[int] = set()
+    chains: list[list[Vector]] = []
+
+    def walk_chain(start_vertex: int, first_edge_index: int) -> list[Vector]:
+        chain = [_copy_vector(vertices[start_vertex])]
+        current_vertex = start_vertex
+        current_edge_index = first_edge_index
+        previous_edge_index = None
+
+        while current_edge_index is not None:
+            visited_edges.add(current_edge_index)
+            edge_start, edge_end = active_edges[current_edge_index]
+            next_vertex = edge_end if edge_start == current_vertex else edge_start
+            chain.append(_copy_vector(vertices[next_vertex]))
+
+            next_edge_index = None
+            if len(adjacency.get(next_vertex, [])) == 2:
+                for candidate_edge_index, _ in adjacency[next_vertex]:
+                    if candidate_edge_index != current_edge_index and candidate_edge_index not in visited_edges:
+                        next_edge_index = candidate_edge_index
+                        break
+            else:
+                for candidate_edge_index, _ in adjacency.get(next_vertex, []):
+                    if candidate_edge_index not in visited_edges and candidate_edge_index != previous_edge_index:
+                        next_edge_index = candidate_edge_index
+                        break
+
+            previous_edge_index = current_edge_index
+            current_vertex = next_vertex
+            current_edge_index = next_edge_index
+        return chain
+
+    start_vertices = [vertex_index for vertex_index, links in adjacency.items() if len(links) != 2]
+    for start_vertex in start_vertices:
+        for edge_index, _ in adjacency.get(start_vertex, []):
+            if edge_index in visited_edges:
+                continue
+            chain = walk_chain(start_vertex, edge_index)
+            if len(chain) >= 2:
+                chains.append(chain)
+
+    for edge_index, (start_vertex, _) in enumerate(active_edges):
+        if edge_index in visited_edges:
+            continue
+        chain = walk_chain(start_vertex, edge_index)
+        if len(chain) >= 2:
+            chains.append(chain)
+
+    return chains
+
+
+def vehicle_motion_points_from_chain(chain: list[Vector]) -> list[Vector]:
+    if len(chain) <= 2:
+        return [_copy_vector(point) for point in chain]
+    if _vector_equals(chain[0], chain[-1]):
+        return [_copy_vector(point) for point in chain[:-1]]
+    return [_copy_vector(point) for point in chain] + [_copy_vector(point) for point in reversed(chain[1:-1])]
+
+
+def _chain_length(chain: list[Vector]) -> float:
+    if len(chain) < 2:
+        return 0.0
+    return sum((chain[index + 1] - chain[index]).length for index in range(len(chain) - 1))
+
+
+def get_base_object():
+    return bpy.data.objects.get(ICITY_BASE_OBJECT)
+
+
+def extract_vehicle_road_paths_from_scene() -> list[list[Vector]]:
+    base_object = get_base_object()
+    if base_object is None:
+        return []
+
+    mesh = getattr(base_object, "data", None)
+    if mesh is None:
+        return []
+    attributes = getattr(mesh, "attributes", None)
+    if attributes is None:
+        return []
+    road_deleted_attribute = attributes.get("Road del")
+    if road_deleted_attribute is None:
+        return []
+
+    vertices = []
+    matrix_world = getattr(base_object, "matrix_world", None)
+    for vertex in getattr(mesh, "vertices", []):
+        point = vertex.co
+        if matrix_world is not None and hasattr(matrix_world, "__matmul__"):
+            point = matrix_world @ point
+        vertices.append(_copy_vector(point))
+
+    edge_vertex_indices = [tuple(edge.vertices) for edge in getattr(mesh, "edges", [])]
+    road_deleted_flags = [
+        bool(getattr(data, "value", getattr(data, "value_bool", True)))
+        for data in getattr(road_deleted_attribute, "data", [])
+    ]
+    chains = extract_road_edge_chains(vertices, edge_vertex_indices, road_deleted_flags)
+    chains = [chain for chain in chains if len(chain) >= 2 and _chain_length(chain) >= 6.0]
+    chains.sort(key=_chain_length, reverse=True)
+    return chains
 
 
 def compute_traffic_layout(center: Vector, city_radius: float, ground_z: float, settings) -> dict:
@@ -352,6 +482,112 @@ def _generate_vehicles(settings, path_collection, vehicle_collection, surface_po
         )
 
 
+def _offset_chain(points: list[Vector], offset: float) -> list[Vector]:
+    if len(points) < 2:
+        return [_copy_vector(point) for point in points]
+    shifted_points: list[Vector] = []
+    for index, point in enumerate(points):
+        previous_point = points[index - 1] if index > 0 else points[index]
+        next_point = points[index + 1] if index < len(points) - 1 else points[index]
+        tangent = next_point - previous_point
+        tangent_length = math.sqrt(tangent.x * tangent.x + tangent.y * tangent.y)
+        if tangent_length == 0.0:
+            normal = Vector((0.0, 1.0, 0.0))
+        else:
+            normal = Vector((-tangent.y / tangent_length, tangent.x / tangent_length, 0.0))
+        shifted_points.append(Vector((point.x + normal.x * offset, point.y + normal.y * offset, point.z)))
+    return shifted_points
+
+
+def _generate_vehicles_on_road_paths(settings, path_collection, vehicle_collection, road_paths: list[list[Vector]]) -> None:
+    sequence = vehicle_type_sequence(settings)
+    if not road_paths or not sequence:
+        return
+
+    frame_start = settings.animation_start
+    frame_end = settings.animation_end
+    frame_count = max(frame_end - frame_start, 2)
+    base_vehicle_scale = _clamp(getattr(settings, "vehicle_scale", 0.78), 0.3, 2.4)
+    bus_scale = _clamp(getattr(settings, "bus_scale", 1.18), 0.5, 3.0)
+
+    route_paths = []
+    for route_index, road_path in enumerate(road_paths):
+        motion_points = vehicle_motion_points_from_chain(road_path)
+        if len(motion_points) < 2:
+            continue
+        path_obj = ecology_common.create_follow_path(
+            f"ICITY_TRAFFIC_RoadPath_{route_index + 1}",
+            motion_points,
+            path_collection,
+            Vector((0.0, 0.0, 0.0)),
+            frame_count,
+        )
+        route_paths.append(path_obj)
+    if not route_paths:
+        return
+
+    total = max(len(sequence), 1)
+    for index, vehicle_type in enumerate(sequence):
+        path_obj = route_paths[index % len(route_paths)]
+        mesh_scale = bus_scale if vehicle_type == "BUS" else base_vehicle_scale
+        vertices, faces = _vehicle_mesh(vehicle_type, mesh_scale)
+        ecology_common.create_follower(
+            name=f"ICITY_TRAFFIC_{vehicle_type}_{index + 1}",
+            collection=vehicle_collection,
+            mesh_vertices=vertices,
+            mesh_faces=faces,
+            material=_vehicle_material(vehicle_type),
+            path_obj=path_obj,
+            frame_start=frame_start,
+            frame_end=frame_end,
+            phase_start=index / total,
+            bobbing=(0.02, 0.05),
+        )
+
+
+def _generate_pedestrians_near_road_paths(settings, path_collection, pedestrian_collection, road_paths: list[list[Vector]]) -> None:
+    pedestrian_count = max(getattr(settings, "pedestrian_count", 0), 0)
+    if not road_paths or pedestrian_count == 0:
+        return
+
+    frame_start = settings.animation_start
+    frame_end = settings.animation_end
+    frame_count = max(frame_end - frame_start, 2)
+    pedestrian_scale = _clamp(getattr(settings, "pedestrian_scale", 0.92), 0.4, 2.2)
+    vertices, faces = _pedestrian_mesh(pedestrian_scale)
+
+    route_paths = []
+    for route_index, road_path in enumerate(road_paths):
+        offset = 1.25 if route_index % 2 == 0 else -1.25
+        motion_points = vehicle_motion_points_from_chain(_offset_chain(road_path, offset))
+        if len(motion_points) < 2:
+            continue
+        path_obj = ecology_common.create_follow_path(
+            f"ICITY_TRAFFIC_WalkPath_{route_index + 1}",
+            motion_points,
+            path_collection,
+            Vector((0.0, 0.0, 0.0)),
+            frame_count,
+        )
+        route_paths.append(path_obj)
+    if not route_paths:
+        return
+
+    for index in range(pedestrian_count):
+        ecology_common.create_follower(
+            name=f"ICITY_TRAFFIC_Pedestrian_{index + 1}",
+            collection=pedestrian_collection,
+            mesh_vertices=vertices,
+            mesh_faces=faces,
+            material=_pedestrian_material(),
+            path_obj=route_paths[index % len(route_paths)],
+            frame_start=frame_start,
+            frame_end=frame_end,
+            phase_start=index / max(pedestrian_count, 1),
+            bobbing=(0.0, 0.04),
+        )
+
+
 def _generate_pedestrians(settings, path_collection, pedestrian_collection, surface_points: dict) -> None:
     frame_start = settings.animation_start
     frame_end = settings.animation_end
@@ -405,12 +641,16 @@ def generate_traffic_crowd(context: bpy.types.Context) -> None:
     pedestrian_collection = ecology_common.get_or_create_child_collection(traffic_root, TRAFFIC_PEDESTRIAN_COLLECTION)
     path_collection = ecology_common.get_or_create_child_collection(traffic_root, TRAFFIC_PATH_COLLECTION)
 
-    center, city_radius, ground_z = ecology_common.get_city_bounds()
-    layout = compute_traffic_layout(center, city_radius, ground_z, settings)
-    surface_points = _build_vehicle_and_walkway_surfaces(layout, settings, vehicle_collection, pedestrian_collection)
-
-    _generate_vehicles(settings, path_collection, vehicle_collection, surface_points)
-    _generate_pedestrians(settings, path_collection, pedestrian_collection, surface_points)
+    road_paths = extract_vehicle_road_paths_from_scene()
+    if road_paths:
+        _generate_vehicles_on_road_paths(settings, path_collection, vehicle_collection, road_paths)
+        _generate_pedestrians_near_road_paths(settings, path_collection, pedestrian_collection, road_paths)
+    else:
+        center, city_radius, ground_z = ecology_common.get_city_bounds()
+        layout = compute_traffic_layout(center, city_radius, ground_z, settings)
+        surface_points = _build_vehicle_and_walkway_surfaces(layout, settings, vehicle_collection, pedestrian_collection)
+        _generate_vehicles(settings, path_collection, vehicle_collection, surface_points)
+        _generate_pedestrians(settings, path_collection, pedestrian_collection, surface_points)
 
     context.scene.frame_start = settings.animation_start
     context.scene.frame_end = settings.animation_end

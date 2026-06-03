@@ -203,6 +203,78 @@ class SmartCityExtensionTests(unittest.TestCase):
         self.assertIn("ICITY_OT_ClearTrafficCrowd", class_names)
         self.assertIn("ICITY_PT_TrafficCrowdPanel", class_names)
 
+    def test_extract_road_edge_chains_ignores_removed_edges(self):
+        traffic_extension = load_module("traffic_extension_road_chains", "iCity/smart_city/traffic_extension.py")
+
+        vertices = [
+            Vector((0.0, 0.0, 0.0)),
+            Vector((5.0, 0.0, 0.0)),
+            Vector((10.0, 0.0, 0.0)),
+            Vector((15.0, 0.0, 0.0)),
+        ]
+        edge_vertex_indices = [(0, 1), (1, 2), (2, 3)]
+        road_deleted_flags = [False, False, True]
+
+        chains = traffic_extension.extract_road_edge_chains(vertices, edge_vertex_indices, road_deleted_flags)
+
+        self.assertEqual(len(chains), 1)
+        self.assertEqual([(point.x, point.y, point.z) for point in chains[0]], [(0.0, 0.0, 0.0), (5.0, 0.0, 0.0), (10.0, 0.0, 0.0)])
+
+    def test_vehicle_motion_points_from_open_chain_ping_pong_without_shortcut(self):
+        traffic_extension = load_module("traffic_extension_pingpong", "iCity/smart_city/traffic_extension.py")
+
+        chain = [
+            Vector((0.0, 0.0, 0.0)),
+            Vector((5.0, 0.0, 0.0)),
+            Vector((10.0, 0.0, 0.0)),
+            Vector((15.0, 0.0, 0.0)),
+        ]
+
+        motion_points = traffic_extension.vehicle_motion_points_from_chain(chain)
+
+        self.assertEqual(
+            [(point.x, point.y, point.z) for point in motion_points],
+            [
+                (0.0, 0.0, 0.0),
+                (5.0, 0.0, 0.0),
+                (10.0, 0.0, 0.0),
+                (15.0, 0.0, 0.0),
+                (10.0, 0.0, 0.0),
+                (5.0, 0.0, 0.0),
+            ],
+        )
+
+    def test_generate_traffic_module_prefers_base_road_paths_over_outer_fallback(self):
+        traffic_extension = load_module("traffic_extension_prefers_base_roads", "iCity/smart_city/traffic_extension.py")
+        settings = types.SimpleNamespace(
+            animation_start=1,
+            animation_end=60,
+        )
+        frame_calls = []
+        scene = types.SimpleNamespace(
+            icity_traffic_settings=settings,
+            frame_start=0,
+            frame_end=0,
+            frame_set=lambda frame: frame_calls.append(frame),
+        )
+        context = types.SimpleNamespace(scene=scene)
+        generated = []
+
+        traffic_extension.clear_traffic_crowd = lambda: None
+        traffic_extension.bpy.data.collections = {traffic_extension.ICITY_ROOT_COLLECTION: object()}
+        traffic_extension.ecology_common.get_or_create_child_collection = lambda parent, name: object()
+        traffic_extension.extract_vehicle_road_paths_from_scene = lambda: [[Vector((0.0, 0.0, 0.0)), Vector((10.0, 0.0, 0.0)), Vector((20.0, 0.0, 0.0))]]
+        traffic_extension._build_vehicle_and_walkway_surfaces = (
+            lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("outer fallback should not be used"))
+        )
+        traffic_extension._generate_vehicles_on_road_paths = lambda settings, path_collection, vehicle_collection, road_paths: generated.append(("vehicles", len(road_paths)))
+        traffic_extension._generate_pedestrians_near_road_paths = lambda settings, path_collection, pedestrian_collection, road_paths: generated.append(("pedestrians", len(road_paths)))
+
+        traffic_extension.generate_traffic_crowd(context)
+
+        self.assertEqual(generated, [("vehicles", 1), ("pedestrians", 1)])
+        self.assertEqual(frame_calls, [1])
+
     def test_clear_streetlights_only_removes_generated_collection(self):
         asset_extension = load_module("asset_extension_clear_streetlights", "iCity/smart_city/asset_extension.py")
         calls = []

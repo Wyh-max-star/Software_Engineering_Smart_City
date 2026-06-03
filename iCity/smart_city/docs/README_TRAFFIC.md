@@ -62,10 +62,9 @@ It should not remove:
 
 Expected:
 
-- two visible vehicle loop bands
-- two visible pedestrian loop bands
-- cars / taxis / buses visible around the city edge
-- pedestrians visible outside the vehicle bands
+- cars / taxis / buses follow the generated city road network
+- pedestrians appear near the same road corridors
+- if no readable road graph is available, the module falls back to the outer demo bands
 
 ### Validation 2: Animation
 
@@ -74,9 +73,9 @@ Expected:
 
 Expected:
 
-- vehicles move in a single consistent direction
-- buses use the outer vehicle lane
-- pedestrians move on separate walkway loops
+- vehicles move along real iCity road-aligned paths
+- vehicles do not cut through building masses
+- pedestrians move along nearby offset paths
 
 ### Validation 3: Clear
 
@@ -92,4 +91,6 @@ Expected:
 
 This module is intentionally demo-oriented.
 
-It does not attempt to reconstruct the internal iCity road graph. Instead, it reads the generated city bounds and builds a stable outer traffic presentation layer for the course assignment demo.
+The current implementation now prefers the road graph encoded by `ICity Base` edge attributes, especially the `Road del` road-selection attribute. It extracts road chains from the generated city and builds vehicle paths on top of those chains.
+
+If the current scene does not expose usable road attributes, the module still falls back to the outer presentation-layer traffic bands so the panel remains usable.
