@@ -30,8 +30,11 @@
       "scale_ratio": 0.54,
       "ground_offset": 0.035,
       "lane_offset": 0.6,
-      "sample_spacing": 1.0,
-      "smoothing_iterations": 2,
+      "sample_spacing": 0.75,
+      "smoothing_iterations": 3,
+      "corner_rounding_radius": 2.0,
+      "corner_rounding_segments": 7,
+      "corner_max_angle_deg": 135.0,
       "usage": "traffic_vehicle",
       "license": "External vehicle model; verify redistribution terms before public release"
     },

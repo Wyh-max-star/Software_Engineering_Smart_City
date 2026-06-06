@@ -62,8 +62,11 @@ TRAFFIC_BUNDLED_VEHICLE_DEFAULTS = {
     "scale_ratio": 0.54,
     "ground_offset": 0.035,
     "lane_offset": 0.6,
-    "sample_spacing": 1.0,
-    "smoothing_iterations": 2,
+    "sample_spacing": 0.75,
+    "smoothing_iterations": 3,
+    "corner_rounding_radius": 2.0,
+    "corner_rounding_segments": 7,
+    "corner_max_angle_deg": 135.0,
 }
 
 
@@ -386,12 +389,110 @@ def _smooth_open_polyline(points: list[Vector], iterations: int) -> list[Vector]
     return smoothed
 
 
+def _cross_2d(a: Vector, b: Vector) -> float:
+    return a.x * b.y - a.y * b.x
+
+
+def _dot_2d(a: Vector, b: Vector) -> float:
+    return a.x * b.x + a.y * b.y
+
+
+def _rounded_corner_points(
+    previous_point: Vector,
+    corner_point: Vector,
+    next_point: Vector,
+    radius: float,
+    segments: int,
+    max_angle_deg: float,
+) -> list[Vector]:
+    incoming = corner_point - previous_point
+    outgoing = next_point - corner_point
+    incoming_length = incoming.length
+    outgoing_length = outgoing.length
+    if incoming_length == 0.0 or outgoing_length == 0.0:
+        return [_copy_vector(corner_point)]
+
+    incoming_dir = incoming * (1.0 / incoming_length)
+    outgoing_dir = outgoing * (1.0 / outgoing_length)
+    turn_cos = _clamp(_dot_2d(incoming_dir, outgoing_dir), -1.0, 1.0)
+    angle_deg = math.degrees(math.acos(turn_cos))
+    if angle_deg <= 1.0 or angle_deg >= float(max_angle_deg):
+        return [_copy_vector(corner_point)]
+
+    trim_distance = min(float(radius), incoming_length * 0.35, outgoing_length * 0.35)
+    if trim_distance <= 1e-5:
+        return [_copy_vector(corner_point)]
+
+    entry_point = corner_point - incoming_dir * trim_distance
+    exit_point = corner_point + outgoing_dir * trim_distance
+
+    incoming_normal = Vector((-incoming_dir.y, incoming_dir.x, 0.0))
+    outgoing_normal = Vector((-outgoing_dir.y, outgoing_dir.x, 0.0))
+    turn_sign = 1.0 if _cross_2d(incoming_dir, outgoing_dir) >= 0.0 else -1.0
+    incoming_normal = incoming_normal * turn_sign
+    outgoing_normal = outgoing_normal * turn_sign
+
+    center = None
+    determinant = _cross_2d(incoming_normal, outgoing_normal)
+    if abs(determinant) > 1e-5:
+        delta = exit_point - entry_point
+        t_value = _cross_2d(delta, outgoing_normal) / determinant
+        center = entry_point + incoming_normal * t_value
+
+    if center is None:
+        return [entry_point, exit_point]
+
+    start_angle = math.atan2(entry_point.y - center.y, entry_point.x - center.x)
+    end_angle = math.atan2(exit_point.y - center.y, exit_point.x - center.x)
+
+    if turn_sign > 0.0 and end_angle <= start_angle:
+        end_angle += math.tau
+    elif turn_sign < 0.0 and end_angle >= start_angle:
+        end_angle -= math.tau
+
+    arc_points = [entry_point]
+    total_segments = max(int(segments), 2)
+    for step in range(1, total_segments):
+        factor = step / total_segments
+        angle = start_angle + (end_angle - start_angle) * factor
+        arc_points.append(Vector((center.x + math.cos(angle) * trim_distance, center.y + math.sin(angle) * trim_distance, corner_point.z)))
+    arc_points.append(exit_point)
+    return arc_points
+
+
+def _round_sharp_corners(
+    points: list[Vector],
+    radius: float,
+    segments: int,
+    max_angle_deg: float,
+) -> list[Vector]:
+    if len(points) <= 2 or radius <= 0.0:
+        return [_copy_vector(point) for point in points]
+
+    rounded = [_copy_vector(points[0])]
+    for index in range(1, len(points) - 1):
+        arc_points = _rounded_corner_points(
+            points[index - 1],
+            points[index],
+            points[index + 1],
+            radius,
+            segments,
+            max_angle_deg,
+        )
+        rounded.extend(arc_points)
+    rounded.append(_copy_vector(points[-1]))
+    return rounded
+
+
 def prepare_vehicle_path(
     chain: list[Vector],
     *,
     lane_offset: float,
     sample_spacing: float,
     smoothing_iterations: int,
+    corner_rounding_radius: float,
+    corner_rounding_segments: int,
+    corner_max_angle_deg: float,
 ) -> list[Vector]:
     if len(chain) <= 2:
         if abs(lane_offset) > 1e-6:
@@ -399,6 +500,12 @@ def prepare_vehicle_path(
         return [_copy_vector(point) for point in chain]
 
     prepared = _offset_chain(chain, lane_offset) if abs(lane_offset) > 1e-6 else [_copy_vector(point) for point in chain]
+    prepared = _round_sharp_corners(
+        prepared,
+        float(corner_rounding_radius),
+        int(corner_rounding_segments),
+        float(corner_max_angle_deg),
+    )
     prepared = _resample_polyline(prepared, sample_spacing)
     prepared = _smooth_open_polyline(prepared, smoothing_iterations)
     return _resample_polyline(prepared, sample_spacing)
@@ -779,6 +886,9 @@ def _generate_vehicles_on_road_paths(settings, path_collection, vehicle_collecti
             lane_offset=0.0,
             sample_spacing=float(bus_profile["sample_spacing"]),
             smoothing_iterations=int(bus_profile["smoothing_iterations"]),
+            corner_rounding_radius=float(bus_profile["corner_rounding_radius"]),
+            corner_rounding_segments=int(bus_profile["corner_rounding_segments"]),
+            corner_max_angle_deg=float(bus_profile["corner_max_angle_deg"]),
         )
         bus_motion_points = vehicle_motion_points_from_chain(prepared_bus_path)
         if len(bus_motion_points) >= 2:
@@ -797,6 +907,9 @@ def _generate_vehicles_on_road_paths(settings, path_collection, vehicle_collecti
                 lane_offset=offset,
                 sample_spacing=float(passenger_profile["sample_spacing"]),
                 smoothing_iterations=int(passenger_profile["smoothing_iterations"]),
+                corner_rounding_radius=float(passenger_profile["corner_rounding_radius"]),
+                corner_rounding_segments=int(passenger_profile["corner_rounding_segments"]),
+                corner_max_angle_deg=float(passenger_profile["corner_max_angle_deg"]),
             )
             motion_points = vehicle_motion_points_from_chain(prepared_path)
             if len(motion_points) < 2:

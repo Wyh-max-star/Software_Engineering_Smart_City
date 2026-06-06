@@ -349,6 +349,9 @@ class SmartCityExtensionTests(unittest.TestCase):
             "scale_ratio": 0.54,
             "ground_offset": 0.035,
             "lane_offset": 0.6,
+            "corner_rounding_radius": 1.4,
+            "corner_rounding_segments": 5,
+            "corner_max_angle_deg": 135.0,
         }
 
         profile = traffic_extension.bundled_vehicle_profile("CAR")
@@ -357,6 +360,9 @@ class SmartCityExtensionTests(unittest.TestCase):
         self.assertAlmostEqual(profile["scale_ratio"], 0.54)
         self.assertAlmostEqual(profile["ground_offset"], 0.035)
         self.assertAlmostEqual(profile["lane_offset"], 0.6)
+        self.assertAlmostEqual(profile["corner_rounding_radius"], 1.4)
+        self.assertEqual(profile["corner_rounding_segments"], 5)
+        self.assertAlmostEqual(profile["corner_max_angle_deg"], 135.0)
 
     def test_prepare_vehicle_path_smooths_corner_and_preserves_endpoints(self):
         traffic_extension = load_module("traffic_extension_vehicle_path_prepare", "iCity/smart_city/traffic_extension.py")
@@ -371,12 +377,27 @@ class SmartCityExtensionTests(unittest.TestCase):
             lane_offset=0.0,
             sample_spacing=1.0,
             smoothing_iterations=2,
+            corner_rounding_radius=1.4,
+            corner_rounding_segments=5,
+            corner_max_angle_deg=135.0,
         )
 
         self.assertGreater(len(prepared), len(chain))
         self.assertEqual((prepared[0].x, prepared[0].y, prepared[0].z), (0.0, 0.0, 0.0))
         self.assertEqual((prepared[-1].x, prepared[-1].y, prepared[-1].z), (8.0, 8.0, 0.0))
         self.assertTrue(any(0.0 < point.x < 8.0 and 0.0 < point.y < 8.0 for point in prepared))
+        self.assertFalse(any(point.x == 8.0 and point.y == 0.0 for point in prepared[1:-1]))
+
+    def test_bundled_vehicle_profile_uses_smoother_turn_defaults_from_manifest(self):
+        traffic_extension = load_module("traffic_extension_vehicle_turn_defaults", "iCity/smart_city/traffic_extension.py")
+
+        profile = traffic_extension.bundled_vehicle_profile("CAR")
+
+        self.assertAlmostEqual(profile["sample_spacing"], 0.75)
+        self.assertEqual(profile["smoothing_iterations"], 3)
+        self.assertAlmostEqual(profile["corner_rounding_radius"], 2.0)
+        self.assertEqual(profile["corner_rounding_segments"], 7)
+        self.assertAlmostEqual(profile["corner_max_angle_deg"], 135.0)
 
     def test_clear_streetlights_only_removes_generated_collection(self):
         asset_extension = load_module("asset_extension_clear_streetlights", "iCity/smart_city/asset_extension.py")
