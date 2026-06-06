@@ -39,6 +39,25 @@
       "license": "External vehicle model; verify redistribution terms before public release"
     },
     {
+      "id": "vehicle_lowpoly_bus_01",
+      "name": "Low Poly Bus",
+      "category": "traffic_vehicle",
+      "path": "assets/vehicles/lowpoly_bus.blend",
+      "collection_name": "Low Poly Retro Van",
+      "object_name": "Low Poly Retro Van",
+      "rotation_z_correction": 1.5707963267948966,
+      "scale_ratio": 0.82,
+      "ground_offset": 0.02,
+      "lane_offset": 0.0,
+      "sample_spacing": 0.9,
+      "smoothing_iterations": 4,
+      "corner_rounding_radius": 2.6,
+      "corner_rounding_segments": 9,
+      "corner_max_angle_deg": 145.0,
+      "usage": "traffic_vehicle",
+      "license": "External vehicle model; verify redistribution terms before public release"
+    },
+    {
       "id": "planter_box_proc_01",
       "name": "Planter Box Procedural",
       "category": "roadside_asset",

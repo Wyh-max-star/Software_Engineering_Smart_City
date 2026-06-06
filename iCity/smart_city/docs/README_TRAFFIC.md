@@ -11,13 +11,18 @@ It generates:
 - moving buses
 - moving pedestrians
 
-For `Cars` and `Taxis`, the module now prefers the bundled Chevrolet traffic vehicle asset:
+For road vehicles, the module now prefers bundled `.blend` assets:
 
-- asset id: `vehicle_chevrolet_m1009_01`
-- asset file: `iCity/assets/vehicles/1986_chevrolet_m1009.blend`
-- import mode: collection-based `.blend` asset
+- `Cars` / `Taxis`
+  - asset id: `vehicle_chevrolet_m1009_01`
+  - asset file: `iCity/assets/vehicles/1986_chevrolet_m1009.blend`
+- `Buses`
+  - asset id: `vehicle_lowpoly_bus_01`
+  - asset file: `iCity/assets/vehicles/lowpoly_bus.blend`
 
-If that asset cannot be loaded, the module falls back to the existing procedural proxy vehicle so the panel still works.
+All of them use collection-based `.blend` import.
+
+If a vehicle asset cannot be loaded, the module falls back to the existing procedural proxy for that vehicle type so the panel still works.
 
 The module is independent from `ICity Ecology`.
 
@@ -84,6 +89,8 @@ Expected:
 
 - vehicles move along real iCity road-aligned paths
 - vehicles do not cut through building masses
+- cars and taxis use the bundled Chevrolet model when the asset is present
+- buses use the bundled low-poly bus model when the asset is present
 - pedestrians move along nearby offset paths
 
 ### Validation 3: Clear

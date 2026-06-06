@@ -56,7 +56,11 @@ TRAFFIC_CAR_MATERIAL = "ICITY_TRAFFIC_Car_Material"
 TRAFFIC_TAXI_MATERIAL = "ICITY_TRAFFIC_Taxi_Material"
 TRAFFIC_BUS_MATERIAL = "ICITY_TRAFFIC_Bus_Material"
 TRAFFIC_PEDESTRIAN_MATERIAL = "ICITY_TRAFFIC_Pedestrian_Material"
-TRAFFIC_BUNDLED_VEHICLE_ASSET_ID = "vehicle_chevrolet_m1009_01"
+TRAFFIC_BUNDLED_VEHICLE_ASSET_IDS = {
+    "CAR": "vehicle_chevrolet_m1009_01",
+    "TAXI": "vehicle_chevrolet_m1009_01",
+    "BUS": "vehicle_lowpoly_bus_01",
+}
 TRAFFIC_BUNDLED_VEHICLE_DEFAULTS = {
     "rotation_z_correction": math.pi * 0.5,
     "scale_ratio": 0.54,
@@ -319,12 +323,17 @@ def _manifest_object_asset(asset_id: str) -> dict | None:
         return None
 
 
+def bundled_vehicle_asset_id(vehicle_type: str) -> str | None:
+    return TRAFFIC_BUNDLED_VEHICLE_ASSET_IDS.get(vehicle_type)
+
+
 def bundled_vehicle_profile(vehicle_type: str) -> dict:
     profile = dict(TRAFFIC_BUNDLED_VEHICLE_DEFAULTS)
-    if vehicle_type not in {"CAR", "TAXI"}:
+    asset_id = bundled_vehicle_asset_id(vehicle_type)
+    if asset_id is None:
         return profile
 
-    asset = _manifest_object_asset(TRAFFIC_BUNDLED_VEHICLE_ASSET_ID) or {}
+    asset = _manifest_object_asset(asset_id) or {}
     for key in tuple(profile.keys()):
         if key in asset:
             profile[key] = asset[key]
@@ -545,12 +554,13 @@ def _append_collection_hierarchy(manifest: dict, asset: dict, collection) -> dic
 
 
 def _load_bundled_vehicle_template(vehicle_type: str, collection):
-    if vehicle_type not in {"CAR", "TAXI"}:
+    asset_id = bundled_vehicle_asset_id(vehicle_type)
+    if asset_id is None:
         return None
 
     try:
         manifest = asset_registry.load_manifest()
-        asset = asset_registry.get_object_asset(manifest, TRAFFIC_BUNDLED_VEHICLE_ASSET_ID)
+        asset = asset_registry.get_object_asset(manifest, asset_id)
         return _append_collection_hierarchy(manifest, asset, collection)
     except Exception:
         return None
