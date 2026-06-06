@@ -18,11 +18,22 @@ class PedestrianExtensionTests(unittest.TestCase):
         self.assertAlmostEqual(pedestrian_extension.sidewalk_offset(3.4, 1.6), 3.3)
         self.assertAlmostEqual(pedestrian_extension.sidewalk_offset(0.0, 2.0), 2.0)
 
+    def test_polyline_loop_length_wraps_closed(self):
+        pedestrian_extension = _load_pedestrians("looplen")
+        square = [
+            Vector((0.0, 0.0, 0.0)),
+            Vector((2.0, 0.0, 0.0)),
+            Vector((2.0, 2.0, 0.0)),
+            Vector((0.0, 2.0, 0.0)),
+        ]
+
+        self.assertAlmostEqual(pedestrian_extension.polyline_loop_length(square), 8.0)
+
     def test_plan_sidewalk_routes_creates_two_opposing_sides(self):
         pedestrian_extension = _load_pedestrians("routes")
         chain = [Vector((0.0, 0.0, 0.0)), Vector((5.0, 0.0, 0.0)), Vector((10.0, 0.0, 0.0))]
 
-        routes = pedestrian_extension.plan_sidewalk_routes([chain], road_width=3.4, sidewalk_margin=1.6, z_lift=0.05)
+        routes = pedestrian_extension.plan_sidewalk_routes([chain], offset=3.3, z_lift=0.05)
 
         self.assertEqual(len(routes), 2)
         self.assertEqual(routes[0]["side"], 1.0)
@@ -40,7 +51,7 @@ class PedestrianExtensionTests(unittest.TestCase):
         pedestrian_extension = _load_pedestrians("routes_flow")
         chain = [Vector((0.0, 0.0, 0.0)), Vector((5.0, 0.0, 0.0)), Vector((10.0, 0.0, 0.0))]
 
-        routes = pedestrian_extension.plan_sidewalk_routes([chain], road_width=3.4, sidewalk_margin=1.6, z_lift=0.0)
+        routes = pedestrian_extension.plan_sidewalk_routes([chain], offset=3.3, z_lift=0.0)
 
         forward = [(point.x) for point in routes[0]["points"]]
         backward = [(point.x) for point in routes[1]["points"]]
@@ -50,9 +61,7 @@ class PedestrianExtensionTests(unittest.TestCase):
         pedestrian_extension = _load_pedestrians("idle")
         chain = [Vector((0.0, 0.0, 0.0)), Vector((5.0, 0.0, 0.0)), Vector((10.0, 0.0, 0.0))]
 
-        spots = pedestrian_extension.plan_idle_spots(
-            [chain], road_width=3.4, sidewalk_margin=1.6, idle_count=2, seed=3, z_lift=0.05
-        )
+        spots = pedestrian_extension.plan_idle_spots([chain], offset=3.3, idle_count=2, seed=3, z_lift=0.05)
 
         self.assertEqual(len(spots), 2)
         for position, facing in spots:
@@ -64,8 +73,8 @@ class PedestrianExtensionTests(unittest.TestCase):
         pedestrian_extension = _load_pedestrians("idle_count")
         chain = [Vector((0.0, 0.0, 0.0)), Vector((5.0, 0.0, 0.0)), Vector((10.0, 0.0, 0.0))]
 
-        self.assertEqual(pedestrian_extension.plan_idle_spots([chain], 3.4, 1.6, 0, 3, 0.05), [])
-        self.assertEqual(len(pedestrian_extension.plan_idle_spots([chain], 3.4, 1.6, 1, 3, 0.05)), 1)
+        self.assertEqual(pedestrian_extension.plan_idle_spots([chain], 3.3, 0, 3, 0.05), [])
+        self.assertEqual(len(pedestrian_extension.plan_idle_spots([chain], 3.3, 1, 3, 0.05)), 1)
 
     def test_fallback_routes_used_when_no_road_graph(self):
         pedestrian_extension = _load_pedestrians("fallback")
