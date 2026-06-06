@@ -160,6 +160,7 @@ class ICITY_EcologySettings(PropertyGroup):
         items=[
             ("LAKE_RING", "Lake + Mountains", "在平面上生成湖泊，并在外围形成环山"),
             ("MOUNTAIN_ONLY", "Mountain Only", "在平面上生成纯山地场景"),
+            ("RIVER_VALLEY", "River Valley", "中间一条蜿蜒的河，两岸抬升成山的河谷地形"),
         ],
         default="LAKE_RING",
     )
@@ -269,9 +270,40 @@ class ICITY_EcologySettings(PropertyGroup):
     river_depth: FloatProperty(
         name="River Depth",
         description="河床下凹深度",
-        default=2.8,
+        default=3.5,
         min=0.5,
-        max=8.0,
+        soft_max=12.0,
+        max=30.0,
+    )
+    river_source_width: FloatProperty(
+        name="River Source Width",
+        description="河谷模式：河流源头（起点）的宽度",
+        default=6.0,
+        min=1.0,
+        soft_max=40.0,
+        max=120.0,
+    )
+    river_mouth_width: FloatProperty(
+        name="River Mouth Width",
+        description="河谷模式：河流尽头（出口）的宽度，通常比源头宽",
+        default=14.0,
+        min=1.0,
+        soft_max=60.0,
+        max=160.0,
+    )
+    river_meander: FloatProperty(
+        name="River Meander",
+        description="河谷模式：河流的曲折度。0 = 笔直，越大蜿蜒幅度越大",
+        default=0.35,
+        min=0.0,
+        max=1.0,
+    )
+    river_bend_count: IntProperty(
+        name="River Bends",
+        description="河谷模式：河流从源头到尽头的弯曲次数",
+        default=3,
+        min=1,
+        max=8,
     )
     boat_count: IntProperty(
         name="Boat Count",
@@ -387,6 +419,12 @@ class ICITY_PT_EcologyPanel(Panel):
             ecology_col.prop(settings, "lake_depth")
             ecology_col.prop(settings, "debug_water_boats")
             ecology_col.prop(settings, "boat_count")
+        elif settings.ecology_plot_mode == "RIVER_VALLEY":
+            ecology_col.prop(settings, "river_source_width")
+            ecology_col.prop(settings, "river_mouth_width")
+            ecology_col.prop(settings, "river_depth")
+            ecology_col.prop(settings, "river_meander")
+            ecology_col.prop(settings, "river_bend_count")
 
         ecology_hint = ecology_box.box()
         ecology_hint.label(text="每点一次 Add Plot，就会新增一个独立生态平面。", icon="INFO")

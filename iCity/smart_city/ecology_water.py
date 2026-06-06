@@ -391,6 +391,24 @@ def create_plot_guide(plot_index: int, base_location: Vector, settings, collecti
     return guide_obj
 
 
+def river_progress(local_x: float, layout: dict) -> float:
+    """0.0 at the river source (-half_x) to 1.0 at the mouth (+half_x)."""
+    half_x = max(layout["half_x"], 0.001)
+    return clamp((local_x + half_x) / (2.0 * half_x), 0.0, 1.0)
+
+
+def river_center_offset(local_x: float, layout: dict) -> float:
+    """Sideways (local Y) offset of the meandering river centerline at a given X."""
+    t = river_progress(local_x, layout)
+    return layout["river_meander_amp"] * math.sin(layout["river_bend_count"] * math.pi * t + layout["river_phase"])
+
+
+def river_half_width(local_x: float, layout: dict) -> float:
+    """Half channel width at a given X, lerped from source width to mouth width."""
+    t = river_progress(local_x, layout)
+    return layout["river_source_half"] * (1.0 - t) + layout["river_mouth_half"] * t
+
+
 def build_plot_layout(plot_index: int, base_location: Vector, settings) -> dict:
     plot_seed = settings.seed + plot_index * 97
     plot_kind = settings.ecology_plot_mode
@@ -416,6 +434,17 @@ def build_plot_layout(plot_index: int, base_location: Vector, settings) -> dict:
         direction * (short_side * 0.94),
     ]
 
+    # River-valley parameters. The river runs along the local X axis (source at
+    # -half_x, mouth at +half_x) and meanders in Y; mountains rise toward the two
+    # Y edges. The meander amplitude is clamped so the widest part of the channel
+    # still fits inside the plot with room left for the banks.
+    river_source_half = settings.river_source_width * 0.5
+    river_mouth_half = settings.river_mouth_width * 0.5
+    widest_half = max(river_source_half, river_mouth_half)
+    meander_limit = max(half_y - widest_half - short_side * 0.12, 0.0)
+    river_meander_amp = min(settings.river_meander * half_y * 0.55, meander_limit)
+    river_phase = math.radians((plot_seed * 17) % 360)
+
     layout = {
         "plot_index": plot_index,
         "plot_kind": plot_kind,
@@ -432,8 +461,14 @@ def build_plot_layout(plot_index: int, base_location: Vector, settings) -> dict:
         "lake_radius_y": lake_radius_y,
         "water_level": water_level,
         "river_points": river_points,
+        "river_source_half": river_source_half,
+        "river_mouth_half": river_mouth_half,
+        "river_meander_amp": river_meander_amp,
+        "river_bend_count": max(1, int(settings.river_bend_count)),
+        "river_phase": river_phase,
         "plot_seed": plot_seed,
         "has_lake": plot_kind == "LAKE_RING",
+        "has_river": plot_kind == "RIVER_VALLEY",
     }
     layout["peak_specs"] = build_peak_specs(layout, settings)
     return layout
@@ -569,6 +604,30 @@ def terrain_height(local_point: Vector, layout: dict, settings) -> float:
         height += settings.noise_strength * (0.28 + peaks * 0.18) * (detail_noise - 0.08)
         height += ridge_relief * (0.45 + peaks * 0.65)
         return height * edge_softening
+
+    if layout["plot_kind"] == "RIVER_VALLEY":
+        # Distance from the meandering river centerline (measured in local Y).
+        y_center = river_center_offset(local_point.x, layout)
+        bank_distance = abs(local_point.y - y_center)
+        half_width = river_half_width(local_point.x, layout)
+        half_y = max(layout["half_y"], 0.001)
+        # 0.0 at the river bank, 1.0 at the plot's Y edge -> drives the side mountains.
+        lateral = clamp((bank_distance - half_width) / max(half_y - half_width, 0.001), 0.0, 1.0)
+        mountain_rise = smoothstep(0.0, 1.0, lateral)
+
+        height = 0.14 + base_noise + secondary_noise + mountain_noise
+        height += mountain_rise * settings.mountain_height * (0.30 + lateral * 1.05)
+        height += mountain_rise * settings.mountain_height * peaks * 0.55
+        height += mountain_rise * ridge_relief * (0.40 + lateral * 0.70)
+        height += mountain_rise * settings.noise_strength * 0.22 * (detail_noise - 0.08)
+        height *= edge_softening
+
+        # Carve the river channel below the water surface, deepest in the middle.
+        channel = 1.0 - smoothstep(half_width * 0.5, half_width, bank_distance)
+        if channel > 0.0:
+            riverbed = layout["water_level"] - settings.river_depth * (0.25 + 0.75 * channel)
+            height = min(height, riverbed)
+        return height
 
     broad_land = settings.mountain_height * (0.18 + macro_noise * 0.26 + macro_turbulence * 0.14)
     height = 0.14 + base_noise + secondary_noise + mountain_noise
@@ -738,6 +797,45 @@ def create_river(layout: dict, settings, collection: bpy.types.Collection) -> bp
     )
     add_subdivision_modifier(river_obj, levels=2, render_levels=2)
     add_wave_modifier(river_obj, layout["plot_seed"] + 5, height=0.03, width=max(settings.river_width * 1.4, 0.8))
+    return river_obj
+
+
+def create_river_valley_water(layout: dict, settings, collection: bpy.types.Collection) -> bpy.types.Object:
+    """Water ribbon for the RIVER_VALLEY plot: a meandering strip from source to
+    mouth whose width follows the source/mouth widths, sitting at the water level
+    so it fills the channel carved into the terrain."""
+    samples = 56
+    half_x = layout["half_x"]
+    water_level = layout["water_level"]
+    vertices: list[tuple[float, float, float]] = []
+    faces: list[tuple[int, ...]] = []
+    for index in range(samples + 1):
+        x = -half_x + (index / samples) * (2.0 * half_x)
+        y_center = river_center_offset(x, layout)
+        half_width = river_half_width(x, layout) * 0.94
+        vertices.append((x, y_center - half_width, water_level))
+        vertices.append((x, y_center + half_width, water_level))
+        if index > 0:
+            base = index * 2
+            faces.append((base - 2, base, base + 1, base - 1))
+
+    river_obj = create_mesh_object(
+        f"{RIVER_OBJECT_NAME}_{layout['plot_index']:03d}",
+        vertices,
+        faces,
+        collection,
+        layout["terrain_origin"],
+        try_build_material(build_water_material),
+    )
+    river_obj.color = (0.06, 0.32, 0.78, 1.0)
+    try_add_modifier(add_subdivision_modifier, river_obj, levels=2, render_levels=2)
+    try_add_modifier(
+        add_wave_modifier,
+        river_obj,
+        layout["plot_seed"] + 5,
+        height=0.03,
+        width=max(settings.river_mouth_width * 1.2, 1.0),
+    )
     return river_obj
 
 
@@ -948,4 +1046,7 @@ def populate_plot(
         set_parent_keep_transform(lake_obj, terrain_obj)
         if settings.boat_count > 0:
             create_boats(layout, settings, boat_collection, terrain_obj)
+    elif layout["has_river"]:
+        river_obj = create_river_valley_water(layout, settings, water_collection)
+        set_parent_keep_transform(river_obj, terrain_obj)
     return terrain_obj

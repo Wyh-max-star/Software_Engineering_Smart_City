@@ -174,7 +174,7 @@ class SmartCityExtensionTests(unittest.TestCase):
             "ICity Ecology": types.SimpleNamespace(name="ICity Ecology"),
         }
 
-        traffic_extension.clear_traffic_crowd()
+        traffic_extension.clear_traffic()
 
         self.assertEqual(calls, [traffic_extension.TRAFFIC_ROOT_COLLECTION])
 
@@ -185,7 +185,7 @@ class SmartCityExtensionTests(unittest.TestCase):
             animation_end=20,
         )
         context = types.SimpleNamespace(scene=types.SimpleNamespace(icity_traffic_settings=settings))
-        operator = traffic_extension.ICITY_OT_GenerateTrafficCrowd()
+        operator = traffic_extension.ICITY_OT_GenerateTraffic()
         reports = []
         operator.report = lambda level, message: reports.append((level, message))
 
@@ -199,9 +199,9 @@ class SmartCityExtensionTests(unittest.TestCase):
 
         class_names = [cls.__name__ for cls in traffic_extension.CLASSES]
 
-        self.assertIn("ICITY_OT_GenerateTrafficCrowd", class_names)
-        self.assertIn("ICITY_OT_ClearTrafficCrowd", class_names)
-        self.assertIn("ICITY_PT_TrafficCrowdPanel", class_names)
+        self.assertIn("ICITY_OT_GenerateTraffic", class_names)
+        self.assertIn("ICITY_OT_ClearTraffic", class_names)
+        self.assertIn("ICITY_PT_TrafficPanel", class_names)
 
     def test_extract_road_edge_chains_ignores_removed_edges(self):
         traffic_extension = load_module("traffic_extension_road_chains", "iCity/smart_city/traffic_extension.py")
@@ -260,7 +260,7 @@ class SmartCityExtensionTests(unittest.TestCase):
         context = types.SimpleNamespace(scene=scene)
         generated = []
 
-        traffic_extension.clear_traffic_crowd = lambda: None
+        traffic_extension.clear_traffic = lambda: None
         traffic_extension.bpy.data.collections = {traffic_extension.ICITY_ROOT_COLLECTION: object()}
         traffic_extension.ecology_common.get_or_create_child_collection = lambda parent, name: object()
         traffic_extension.extract_vehicle_road_paths_from_scene = lambda: [[Vector((0.0, 0.0, 0.0)), Vector((10.0, 0.0, 0.0)), Vector((20.0, 0.0, 0.0))]]
@@ -268,11 +268,10 @@ class SmartCityExtensionTests(unittest.TestCase):
             lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("outer fallback should not be used"))
         )
         traffic_extension._generate_vehicles_on_road_paths = lambda settings, path_collection, vehicle_collection, road_paths: generated.append(("vehicles", len(road_paths)))
-        traffic_extension._generate_pedestrians_near_road_paths = lambda settings, path_collection, pedestrian_collection, road_paths: generated.append(("pedestrians", len(road_paths)))
 
-        traffic_extension.generate_traffic_crowd(context)
+        traffic_extension.generate_traffic(context)
 
-        self.assertEqual(generated, [("vehicles", 1), ("pedestrians", 1)])
+        self.assertEqual(generated, [("vehicles", 1)])
         self.assertEqual(frame_calls, [1])
 
     def test_clear_streetlights_only_removes_generated_collection(self):

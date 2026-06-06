@@ -1,8 +1,4 @@
-"""Standalone traffic (vehicle) module for the ICity addon.
-
-Pedestrian/crowd movement lives in ``pedestrian_extension``; this module only
-generates roads, road-side walkway surfaces, and animated vehicles.
-"""
+"""Standalone traffic and crowd module for the ICity addon."""
 
 from __future__ import annotations
 
@@ -44,9 +40,9 @@ else:
 ICITY_ROOT_COLLECTION = ecology_common.ICITY_ROOT_COLLECTION
 ICITY_BASE_OBJECT = ecology_common.ICITY_BASE_OBJECT
 remove_collection_recursive = ecology_common.remove_collection_recursive
-TRAFFIC_ROOT_COLLECTION = "ICity Traffic"
+TRAFFIC_ROOT_COLLECTION = "ICity Traffic Crowd"
 TRAFFIC_VEHICLE_COLLECTION = "ICity Traffic Vehicles"
-TRAFFIC_WALKWAY_COLLECTION = "ICity Traffic Walkways"
+TRAFFIC_PEDESTRIAN_COLLECTION = "ICity Traffic Pedestrians"
 TRAFFIC_PATH_COLLECTION = "ICity Traffic Paths"
 
 TRAFFIC_ROAD_INNER_OBJECT = "ICITY_TRAFFIC_RoadInner"
@@ -59,6 +55,7 @@ TRAFFIC_WALKWAY_MATERIAL = "ICITY_TRAFFIC_Walkway_Material"
 TRAFFIC_CAR_MATERIAL = "ICITY_TRAFFIC_Car_Material"
 TRAFFIC_TAXI_MATERIAL = "ICITY_TRAFFIC_Taxi_Material"
 TRAFFIC_BUS_MATERIAL = "ICITY_TRAFFIC_Bus_Material"
+TRAFFIC_PEDESTRIAN_MATERIAL = "ICITY_TRAFFIC_Pedestrian_Material"
 TRAFFIC_BUNDLED_VEHICLE_ASSET_IDS = {
     "CAR": "vehicle_chevrolet_m1009_01",
     "TAXI": "vehicle_chevrolet_m1009_01",
@@ -260,7 +257,7 @@ def vehicle_type_sequence(settings) -> list[str]:
     return sequence
 
 
-def clear_traffic() -> None:
+def clear_traffic_crowd() -> None:
     collection = bpy.data.collections.get(TRAFFIC_ROOT_COLLECTION)
     if collection is not None:
         remove_collection_recursive(collection)
@@ -312,6 +309,10 @@ def _vehicle_material(vehicle_type: str) -> bpy.types.Material:
     if vehicle_type == "TAXI":
         return _build_flat_material(TRAFFIC_TAXI_MATERIAL, (0.94, 0.78, 0.16, 1.0), metallic=0.16, roughness=0.26)
     return _build_flat_material(TRAFFIC_CAR_MATERIAL, (0.15, 0.35, 0.78, 1.0), metallic=0.22, roughness=0.28)
+
+
+def _pedestrian_material() -> bpy.types.Material:
+    return _build_flat_material(TRAFFIC_PEDESTRIAN_MATERIAL, (0.84, 0.58, 0.40, 1.0), roughness=0.66)
 
 
 def _manifest_object_asset(asset_id: str) -> dict | None:
@@ -679,11 +680,41 @@ def _vehicle_mesh(vehicle_type: str, scale: float) -> tuple[list[tuple[float, fl
     return ([(x * scale, y * scale, z * scale) for x, y, z in vertices], faces)
 
 
+def _pedestrian_mesh(scale: float) -> tuple[list[tuple[float, float, float]], list[tuple[int, ...]]]:
+    vertices = [
+        (-0.16, -0.12, 0.00),
+        (-0.16, 0.12, 0.00),
+        (0.16, -0.12, 0.00),
+        (0.16, 0.12, 0.00),
+        (-0.14, -0.10, 0.58),
+        (-0.14, 0.10, 0.58),
+        (0.14, -0.10, 0.58),
+        (0.14, 0.10, 0.58),
+        (-0.10, -0.10, 0.82),
+        (-0.10, 0.10, 0.82),
+        (0.10, -0.10, 0.82),
+        (0.10, 0.10, 0.82),
+    ]
+    faces = [
+        (0, 1, 5, 4),
+        (0, 2, 6, 4),
+        (2, 3, 7, 6),
+        (1, 3, 7, 5),
+        (4, 5, 7, 6),
+        (8, 9, 11, 10),
+        (4, 5, 9, 8),
+        (6, 7, 11, 10),
+        (4, 6, 10, 8),
+        (5, 7, 11, 9),
+    ]
+    return ([(x * scale, y * scale, z * scale) for x, y, z in vertices], faces)
+
+
 def _ellipse_points(center: Vector, radius_x: float, radius_y: float, z: float, count: int) -> list[Vector]:
     return ecology_common.ellipse_points(Vector((center.x, center.y)), radius_x, radius_y, 0.0, count, z)
 
 
-def _build_vehicle_and_walkway_surfaces(layout: dict, settings, vehicle_collection, walkway_collection) -> dict:
+def _build_vehicle_and_walkway_surfaces(layout: dict, settings, vehicle_collection, pedestrian_collection) -> dict:
     center = layout["center"]
     road_width = _clamp(getattr(settings, "road_width", 3.4), 1.8, 12.0)
     walkway_width = _clamp(getattr(settings, "walkway_width", 1.8), 0.8, 6.0)
@@ -737,7 +768,7 @@ def _build_vehicle_and_walkway_surfaces(layout: dict, settings, vehicle_collecti
         TRAFFIC_WALKWAY_INNER_OBJECT,
         inner_walk_points,
         walkway_width,
-        walkway_collection,
+        pedestrian_collection,
         Vector((0.0, 0.0, 0.0)),
         _walkway_material(),
     )
@@ -745,7 +776,7 @@ def _build_vehicle_and_walkway_surfaces(layout: dict, settings, vehicle_collecti
         TRAFFIC_WALKWAY_OUTER_OBJECT,
         outer_walk_points,
         walkway_width,
-        walkway_collection,
+        pedestrian_collection,
         Vector((0.0, 0.0, 0.0)),
         _walkway_material(),
     )
@@ -950,27 +981,112 @@ def _generate_vehicles_on_road_paths(settings, path_collection, vehicle_collecti
         )
 
 
-def generate_traffic(context: bpy.types.Context) -> None:
+def _generate_pedestrians_near_road_paths(settings, path_collection, pedestrian_collection, road_paths: list[list[Vector]]) -> None:
+    pedestrian_count = max(getattr(settings, "pedestrian_count", 0), 0)
+    if not road_paths or pedestrian_count == 0:
+        return
+
+    frame_start = settings.animation_start
+    frame_end = settings.animation_end
+    frame_count = max(frame_end - frame_start, 2)
+    pedestrian_scale = _clamp(getattr(settings, "pedestrian_scale", 0.92), 0.4, 2.2)
+    vertices, faces = _pedestrian_mesh(pedestrian_scale)
+
+    route_paths = []
+    for route_index, road_path in enumerate(road_paths):
+        offset = 1.25 if route_index % 2 == 0 else -1.25
+        motion_points = vehicle_motion_points_from_chain(_offset_chain(road_path, offset))
+        if len(motion_points) < 2:
+            continue
+        path_obj = ecology_common.create_follow_path(
+            f"ICITY_TRAFFIC_WalkPath_{route_index + 1}",
+            motion_points,
+            path_collection,
+            Vector((0.0, 0.0, 0.0)),
+            frame_count,
+        )
+        route_paths.append(path_obj)
+    if not route_paths:
+        return
+
+    for index in range(pedestrian_count):
+        ecology_common.create_follower(
+            name=f"ICITY_TRAFFIC_Pedestrian_{index + 1}",
+            collection=pedestrian_collection,
+            mesh_vertices=vertices,
+            mesh_faces=faces,
+            material=_pedestrian_material(),
+            path_obj=route_paths[index % len(route_paths)],
+            frame_start=frame_start,
+            frame_end=frame_end,
+            phase_start=index / max(pedestrian_count, 1),
+            bobbing=(0.0, 0.04),
+        )
+
+
+def _generate_pedestrians(settings, path_collection, pedestrian_collection, surface_points: dict) -> None:
+    frame_start = settings.animation_start
+    frame_end = settings.animation_end
+    frame_count = max(frame_end - frame_start, 2)
+    pedestrian_count = max(getattr(settings, "pedestrian_count", 0), 0)
+    if pedestrian_count == 0:
+        return
+
+    path_inner = ecology_common.create_follow_path(
+        "ICITY_TRAFFIC_Path_InnerWalk",
+        surface_points["inner_walk_points"],
+        path_collection,
+        Vector((0.0, 0.0, 0.0)),
+        frame_count,
+    )
+    path_outer = ecology_common.create_follow_path(
+        "ICITY_TRAFFIC_Path_OuterWalk",
+        list(reversed(surface_points["outer_walk_points"])),
+        path_collection,
+        Vector((0.0, 0.0, 0.0)),
+        frame_count,
+    )
+    vertices, faces = _pedestrian_mesh(_clamp(getattr(settings, "pedestrian_scale", 0.92), 0.4, 2.2))
+    for index in range(pedestrian_count):
+        use_outer = index % 2 == 0
+        phase = index / pedestrian_count
+        ecology_common.create_follower(
+            name=f"ICITY_TRAFFIC_Pedestrian_{index + 1}",
+            collection=pedestrian_collection,
+            mesh_vertices=vertices,
+            mesh_faces=faces,
+            material=_pedestrian_material(),
+            path_obj=path_outer if use_outer else path_inner,
+            frame_start=frame_start,
+            frame_end=frame_end,
+            phase_start=phase,
+            bobbing=(0.0, 0.04),
+        )
+
+
+def generate_traffic_crowd(context: bpy.types.Context) -> None:
     settings = context.scene.icity_traffic_settings
     root_collection = bpy.data.collections.get(ICITY_ROOT_COLLECTION)
     if root_collection is None:
-        raise RuntimeError("Please run iCity Start before generating traffic.")
+        raise RuntimeError("Please run iCity Start before generating traffic and crowd.")
 
-    clear_traffic()
+    clear_traffic_crowd()
 
     traffic_root = ecology_common.get_or_create_child_collection(root_collection, TRAFFIC_ROOT_COLLECTION)
     vehicle_collection = ecology_common.get_or_create_child_collection(traffic_root, TRAFFIC_VEHICLE_COLLECTION)
-    walkway_collection = ecology_common.get_or_create_child_collection(traffic_root, TRAFFIC_WALKWAY_COLLECTION)
+    pedestrian_collection = ecology_common.get_or_create_child_collection(traffic_root, TRAFFIC_PEDESTRIAN_COLLECTION)
     path_collection = ecology_common.get_or_create_child_collection(traffic_root, TRAFFIC_PATH_COLLECTION)
 
     road_paths = extract_vehicle_road_paths_from_scene()
     if road_paths:
         _generate_vehicles_on_road_paths(settings, path_collection, vehicle_collection, road_paths)
+        _generate_pedestrians_near_road_paths(settings, path_collection, pedestrian_collection, road_paths)
     else:
         center, city_radius, ground_z = ecology_common.get_city_bounds()
         layout = compute_traffic_layout(center, city_radius, ground_z, settings)
-        surface_points = _build_vehicle_and_walkway_surfaces(layout, settings, vehicle_collection, walkway_collection)
+        surface_points = _build_vehicle_and_walkway_surfaces(layout, settings, vehicle_collection, pedestrian_collection)
         _generate_vehicles(settings, path_collection, vehicle_collection, surface_points)
+        _generate_pedestrians(settings, path_collection, pedestrian_collection, surface_points)
 
     context.scene.frame_start = settings.animation_start
     context.scene.frame_end = settings.animation_end
@@ -984,6 +1100,7 @@ class ICITY_TrafficSettings(PropertyGroup):
     car_count: IntProperty(name="Cars", default=6, min=0, max=60)
     taxi_count: IntProperty(name="Taxis", default=2, min=0, max=30)
     bus_count: IntProperty(name="Buses", default=1, min=0, max=12)
+    pedestrian_count: IntProperty(name="Pedestrians", default=12, min=0, max=80)
 
     traffic_outer_offset: FloatProperty(name="Traffic Offset", default=10.0, min=4.0, max=80.0)
     traffic_lane_gap: FloatProperty(name="Lane Gap", default=2.4, min=1.0, max=10.0)
@@ -994,12 +1111,13 @@ class ICITY_TrafficSettings(PropertyGroup):
     walkway_width: FloatProperty(name="Walkway Width", default=1.8, min=0.8, max=6.0)
     vehicle_scale: FloatProperty(name="Vehicle Scale", default=0.78, min=0.3, max=2.4)
     bus_scale: FloatProperty(name="Bus Scale", default=1.18, min=0.5, max=3.0)
+    pedestrian_scale: FloatProperty(name="Pedestrian Scale", default=0.92, min=0.4, max=2.2)
 
 
-class ICITY_OT_GenerateTraffic(Operator):
-    bl_idname = "icity.generate_traffic"
+class ICITY_OT_GenerateTrafficCrowd(Operator):
+    bl_idname = "icity.generate_traffic_crowd"
     bl_label = "Generate / Update"
-    bl_description = "Generate standalone vehicle traffic around the current iCity scene"
+    bl_description = "Generate standalone traffic and crowd around the current iCity scene"
     bl_options = {"REGISTER", "UNDO"}
 
     @classmethod
@@ -1012,18 +1130,18 @@ class ICITY_OT_GenerateTraffic(Operator):
             self.report({"ERROR"}, "End Frame must be greater than Start Frame.")
             return {"CANCELLED"}
         try:
-            generate_traffic(context)
+            generate_traffic_crowd(context)
         except Exception as exc:  # pragma: no cover
-            self.report({"ERROR"}, f"Traffic generation failed: {exc}")
+            self.report({"ERROR"}, f"Traffic and crowd generation failed: {exc}")
             return {"CANCELLED"}
-        self.report({"INFO"}, "ICity traffic generated.")
+        self.report({"INFO"}, "ICity traffic and crowd generated.")
         return {"FINISHED"}
 
 
-class ICITY_OT_ClearTraffic(Operator):
-    bl_idname = "icity.clear_traffic"
+class ICITY_OT_ClearTrafficCrowd(Operator):
+    bl_idname = "icity.clear_traffic_crowd"
     bl_label = "Clear"
-    bl_description = "Clear standalone traffic generated by this module"
+    bl_description = "Clear standalone traffic and crowd generated by this module"
     bl_options = {"REGISTER", "UNDO"}
 
     @classmethod
@@ -1031,14 +1149,14 @@ class ICITY_OT_ClearTraffic(Operator):
         return getattr(context, "scene", None) is not None
 
     def execute(self, context):
-        clear_traffic()
-        self.report({"INFO"}, "ICity traffic cleared.")
+        clear_traffic_crowd()
+        self.report({"INFO"}, "ICity traffic and crowd cleared.")
         return {"FINISHED"}
 
 
-class ICITY_PT_TrafficPanel(Panel):
-    bl_label = "ICity Traffic"
-    bl_idname = "ICITY_PT_traffic_panel"
+class ICITY_PT_TrafficCrowdPanel(Panel):
+    bl_label = "ICity Traffic & Crowd"
+    bl_idname = "ICITY_PT_traffic_crowd_panel"
     bl_space_type = "VIEW_3D"
     bl_region_type = "UI"
     bl_category = "ICity"
@@ -1048,10 +1166,11 @@ class ICITY_PT_TrafficPanel(Panel):
         settings = context.scene.icity_traffic_settings
 
         count_box = layout.box()
-        count_box.label(text="Vehicles", icon="OUTLINER_COLLECTION")
+        count_box.label(text="Dynamic Agents", icon="OUTLINER_COLLECTION")
         count_box.prop(settings, "car_count")
         count_box.prop(settings, "taxi_count")
         count_box.prop(settings, "bus_count")
+        count_box.prop(settings, "pedestrian_count")
 
         band_box = layout.box()
         band_box.label(text="Layout", icon="ORIENTATION_VIEW")
@@ -1066,6 +1185,7 @@ class ICITY_PT_TrafficPanel(Panel):
         scale_box.label(text="Scale", icon="EMPTY_AXIS")
         scale_box.prop(settings, "vehicle_scale")
         scale_box.prop(settings, "bus_scale")
+        scale_box.prop(settings, "pedestrian_scale")
 
         anim_box = layout.box()
         anim_box.label(text="Animation", icon="TIME")
@@ -1073,15 +1193,15 @@ class ICITY_PT_TrafficPanel(Panel):
         anim_box.prop(settings, "animation_end")
 
         row = layout.row(align=True)
-        row.operator("icity.generate_traffic", icon="PLAY")
-        row.operator("icity.clear_traffic", icon="TRASH")
+        row.operator("icity.generate_traffic_crowd", icon="PLAY")
+        row.operator("icity.clear_traffic_crowd", icon="TRASH")
 
 
 CLASSES = (
     ICITY_TrafficSettings,
-    ICITY_OT_GenerateTraffic,
-    ICITY_OT_ClearTraffic,
-    ICITY_PT_TrafficPanel,
+    ICITY_OT_GenerateTrafficCrowd,
+    ICITY_OT_ClearTrafficCrowd,
+    ICITY_PT_TrafficCrowdPanel,
 )
 
 

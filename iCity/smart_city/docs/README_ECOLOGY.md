@@ -1,239 +1,119 @@
-# ICity 生态水域与交通人群扩展说明
+# ICity 生态扩展（Ecology Extension）
 
-这个扩展现在已经按功能拆分成多文件结构，目的是：
+在不改动原有 ICity 主插件逻辑的前提下，新增的一套**独立生态平面**功能：在城市旁边生成
+**地形山峦、湖泊、河流，以及湖面上动态行驶的小船**。
 
-- 降低后续 merge 冲突
-- 让生态块和交通块可以独立维护
-- 让面板入口和功能实现解耦
+---
 
-## 当前文件结构
+## 1. 功能与文件结构
 
-扩展相关文件现在是这 4 个：
+扩展只由 3 个文件组成：
 
-- `ecology_extension.py`
-- `ecology_common.py`
+| 文件 | 作用 |
+|------|------|
+| `ecology_extension.py` | 入口层：面板 UI、参数定义、操作按钮 |
+| `ecology_water.py` | 地形 / 山峦 / 湖泊 / 河流 / 船只的生成与动画 |
+| `ecology_common.py` | 公共工具层：集合管理、网格创建、噪声、动画辅助等 |
 
-## 2026-06-03 Update
+`__init__.py` 里只保留扩展入口的挂接。
 
-- The ecology generation flow now also creates a dedicated collection: `ICity Ecology Assets`.
-- This collection currently contains three procedural lakefront asset types:
-  - `Dock Pier`
-  - `Tree Cluster`
-  - `Shrub Patch`
-- Placement is deterministic from the same layout seed used by the ecology block.
-- The asset anchors are computed in `ecology_common.py`.
-- The Blender mesh generation for these assets lives in `ecology_water.py`.
-- Validation steps are documented in `BLENDER_VALIDATION_PHASE2.md`.
-- `ecology_water.py`
-- `ecology_traffic.py`
+> 注：原本的「交通与人群模拟」和「资产扩充」功能已移除，相关文件备份在
+> `_removed_features_backup/`。
 
-另外原插件只做极少量挂接：
+---
 
-- `__init__.py`
+## 2. 使用步骤
 
-## 每个文件负责什么
+### 第一步：先生成基础城市
+生态平面是依附在城市旁边生成的，所以**必须先在原 ICity 主面板点击 `Start`**，
+生成基础城市场景。否则 Ecology 面板会提示「先在原 ICity 面板点击 Start」。
 
-### `ecology_extension.py`
+### 第二步：打开 Ecology 面板
+在 3D 视口右侧按 `N` 调出侧边栏 → 找到 **`ICity` 标签页** → **`ICity Ecology`** 面板。
 
-这是总入口文件，只负责：
+### 第三步：调参数 → 点 `Add Plot`
+设置好下面的参数后，点击 **`Add Plot`**，就会在城市外围**新增一块独立生态平面**。
+每点一次就多一块，互不影响，可以反复添加。
 
-- Blender 面板 UI
-- 参数定义 `PropertyGroup`
-- 操作符 `Generate / Update`、`Clear`
-- 总调度
-- 注册 / 注销
+### 第四步：看效果
+- 默认视口是 `Solid` 着色，可能看起来灰扑扑的。切到右上角的 **`Material Preview`（材质预览）**
+  或 **`Rendered`（渲染）** 模式，就能看到正确的草地、湖水、船只颜色。
+- 船**默认不会自动播放**。想看船在湖上行驶，按 **空格键** 或时间轴上的 ▶ 播放即可。
 
-如果后续要改这些内容，主要改这里：
+### 清空
+点 **`Clear All`** 移除本扩展生成的所有生态地块。
 
-- 新增参数滑块
-- 新增按钮
-- 修改面板布局
-- 调整哪个按钮调用哪个功能模块
+---
 
-### `ecology_common.py`
+## 3. 「Use 3D Cursor」怎么用 ⭐
 
-这是公共工具文件，负责两大模块都要复用的底层能力：
+这是你截图里那个勾选框，用来**决定新地块生成在哪里**：
 
-- 集合创建和清理
-- mesh 创建
-- 路径动画的公共封装
-- 材质辅助函数
-- 计算城市边界
-- 共享几何工具
-- 共享布局计算
+- **不勾选（默认）**：地块会自动放到城市外围的一个计算位置（每块按角度错开排布）。
+  适合「我不关心位置，自动排开就行」。
 
-如果后续是“工具层能力”变动，改这里。
+- **勾选后**：地块会生成到 **3D Cursor（3D 游标）所在的位置**。
+  也就是你可以**先把 3D 游标移到想要的地方，再点 Add Plot，地块就出现在那里**。
 
-### `ecology_water.py`
+**怎么移动 3D 游标？**（3D 游标是视口里那个红白相间的小圆圈）
+1. 按住 `Shift` + 鼠标右键 点击视口某处 —— 游标就跳到那里；
+2. 或者 `Shift + S` 调出 Snap 菜单，把游标对齐到选中物体 / 世界原点等；
+3. 想归零：`Shift + C` 把游标移回世界中心。
 
-这是生态水域模块，负责：
+**典型用法**：勾上 `Use 3D Cursor` → `Shift+右键` 在城市某个空地点一下 → 点 `Add Plot`，
+湖和山就生成在你点的那个位置。
 
-- 城市外围地形
-- 湖泊
-- 河流
-- 动态船只
+---
 
-也就是说，你负责的“地形、河流、船只等生态化元素”核心逻辑主要在这里。
+## 4. 参数说明
 
-### `ecology_traffic.py`
+### Global（全局）
+| 参数 | 说明 |
+|------|------|
+| Seed | 随机种子，改变山峰/湖泊/船只的分布形态 |
+| Start / End Frame | 船只动画的起止帧 |
 
-这是交通与人群模块，负责：
+### Ecology Plot Block（生态地块）
+| 参数 | 说明 |
+|------|------|
+| Enable Ecology | 是否启用生态地块生成 |
+| Plot Mode | `Lake + Mountains`（湖+环山）/ `Mountain Only`（纯山地）/ `River Valley`（河谷：中间一条河，两岸是山） |
+| Plot Shape | 地块外轮廓：`Rectangle`（矩形）/ `Ellipse`（椭圆）。**河谷模式建议用 Rectangle**，河流才能贯穿整块到两端 |
+| Plot Width / Depth | 地块的宽和纵深 |
+| Plot Offset | 地块离城市的距离（不勾 Use 3D Cursor 时生效） |
+| Plot Height Offset | 地块整体的高度偏移 |
+| **Use 3D Cursor** | 见上方第 3 节 |
+| Terrain Resolution | 地形网格分辨率，越高越细致（越高生成越慢，上限 256） |
+| **Mountain Height** | 山体抬升强度。拖动到 80，手动可输入到 200 |
+| **Terrain Noise** | 地形细节与**棱线**起伏强度，越大山越崎岖、棱角越多。拖到 30，手动可输入到 60 |
+| Peak Count | 山峰簇数量 |
 
-- 动态汽车
-- 动态行人
-- 环形景观道路
-- 湖边步道
-- 对应的路径动画
+当 Plot Mode 为 `Lake + Mountains` 时，额外出现：
+| 参数 | 说明 |
+|------|------|
+| Lake Radius | 湖泊基础半径 |
+| Lake Depth | 湖泊下凹深度 |
+| Debug Water & Boats | 调试用：高亮湖水和船只，便于确认是否生成成功 |
+| **Boat Count** | 湖面动态船只数量（船会沿湖均匀分布、各自循环行驶） |
 
-## 为什么这样拆
-
-这样拆之后，入口和功能就分开了：
-
-- 改 UI 时，不必碰具体功能算法
-- 改生态逻辑时，不必碰交通逻辑
-- 改交通逻辑时，也不必碰生态逻辑
-
-最重要的是，队友以后不需要都挤在一个大文件里改。
-
-## 两个功能块
-
-面板里仍然保留两大块：
-
-- `Ecology / Lake Block`
-- `Traffic & Crowd Block`
-
-### 模块一：生态水域块
-
-负责：
-
-- 山地地形
-- 湖泊
-- 河流
-- 船只
-
-主要参数：
-
-- `Enable Ecology`
-- `Terrain Margin`
-- `Terrain Resolution`
-- `Mountain Height`
-- `Terrain Noise`
-- `Lake Radius`
-- `Lake Depth`
-- `Generate River`
-- `River Width`
-- `River Depth`
-- `Boat Count`
-
-核心代码文件：
-
-- `ecology_water.py`
-
-### 模块二：交通与人群块
-
-负责：
-
-- 汽车
-- 人群
-- 环路
-- 步道
-
-主要参数：
-
-- `Enable Traffic & Crowd`
-- `Car Count`
-- `Crowd Count`
-- `Road Width`
-- `Traffic Radius X`
-- `Traffic Radius Y`
-- `Walkway Width`
-- `Walkway Offset`
-- `Car Scale`
-- `Pedestrian Scale`
-
-核心代码文件：
-
-- `ecology_traffic.py`
-
-## 队友后续应该怎么改
-
-推荐分工方式：
-
-- 改面板和参数：改 `ecology_extension.py`
-- 改生态功能：改 `ecology_water.py`
-- 改交通人群功能：改 `ecology_traffic.py`
-- 改底层通用工具：改 `ecology_common.py`
-
-这样最稳。
-
-不推荐的方式：
-
-- 所有人都继续改 `ecology_extension.py`
-
-那样会重新回到“大文件冲突”的老问题。
-
-## Blender 4.1 使用方式
-
-1. 把整个 `icity` 文件夹放到 Blender 4.1 的插件目录
-2. 启动 Blender 4.1
-3. 在 `Edit > Preferences > Add-ons` 中启用 `ICity`
-4. 打开 3D View 右侧侧边栏，找到 `ICity`
-5. 在原始面板点击 `Start`
-6. 打开新增的 `ICity Ecology` 面板
-7. 选择启用 `Ecology / Lake Block`、`Traffic & Crowd Block` 或两者都启用
-8. 点击 `Generate / Update`
-
-如果需要清空本扩展生成的内容，点击 `Clear`。
-
-## 运行生成后会出现的集合
-
-扩展会在原始 `ICity` 集合下面生成：
-
-- `ICity Ecology`
-- `ICity Ecology Terrain`
-- `ICity Ecology Water`
-- `ICity Ecology Boats`
-- `ICity Ecology Traffic`
-- `ICity Ecology Crowd`
-- `ICity Ecology Paths`
-
-## 合并方式
-
-如果队友要把这部分合进他们的版本，最小改动方式还是：
-
-1. 复制这 4 个扩展文件
-2. 保留 `__init__.py` 中已有的 `ecology_extension` 导入
-3. 保留 `register()` 中的 `ecology_extension.register()`
-4. 保留 `unregister()` 中的 `ecology_extension.unregister()`
-
-也就是说，原插件仍然只知道一个入口：
-
-- `ecology_extension.py`
-
-而入口文件再去调用其他两个功能模块和一个公共模块。
-
-## 当前结构的好处
-
-- 插件外部入口没变
-- 面板位置没变
-- 使用方式没变
-- 代码结构明显更清晰
-- 后续你和队友都更容易分开改
-
-## 代码定位建议
-
-如果你以后只看自己负责的生态块，优先看：
-
-- `ecology_water.py`
-
-如果要改 UI 和参数，优先看：
-
-- `ecology_extension.py`
-
-如果要改交通/人群，优先看：
-
-- `ecology_traffic.py`
-
-如果要改共用底层工具，再看：
-
-- `ecology_common.py`
+当 Plot Mode 为 `River Valley`（河谷）时，额外出现：
+| 参数 | 说明 |
+|------|------|
+| River Source Width | **源头宽度** —— 河流起点（地块一端）的宽度 |
+| River Mouth Width | **河尽头宽度** —— 河流出口（另一端）的宽度，一般比源头宽 |
+| River Depth | **深度** —— 河床下挖深度 |
+| River Meander | **曲折度** —— 0 = 笔直，越大河流蜿蜒幅度越大 |
+| River Bends | **弯曲次数** —— 河流从源头到尽头拐几个弯 |
+
+> 河谷地形说明：河流沿地块长轴（X 方向）从源头流向尽头，宽度由源头宽线性过渡到尽头宽；
+> 两岸随着远离河道逐渐抬升成山，山的高度/崎岖度由 **Mountain Height** 和 **Terrain Noise**
+> 控制。建议把 **Plot Shape 设为 Rectangle**，这样河流能完整贯穿到地块两端。
+
+---
+
+## 5. 常见问题
+
+- **生成后看不到颜色 / 全是灰色**：切到 `Material Preview` 或 `Rendered` 着色模式。
+- **船没动**：动画默认不自动播放，按空格键播放。
+- **想让山更尖、棱角更多**：把 `Terrain Noise` 往上拉（如 15~30），`Mountain Height` 拉高。
+- **改了代码不生效**：完全退出 Blender（Cmd+Q）重开，或在偏好设置里禁用再启用插件。
