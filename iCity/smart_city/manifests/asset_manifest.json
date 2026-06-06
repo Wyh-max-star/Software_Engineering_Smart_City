@@ -20,6 +20,22 @@
       "license": "Existing iCity classroom project asset"
     },
     {
+      "id": "vehicle_chevrolet_m1009_01",
+      "name": "1986 Chevrolet M1009",
+      "category": "traffic_vehicle",
+      "path": "assets/vehicles/1986_chevrolet_m1009.blend",
+      "collection_name": "1986 Chevrolet M1009",
+      "object_name": "1986 Chevrolet M1009",
+      "rotation_z_correction": 1.5707963267948966,
+      "scale_ratio": 0.54,
+      "ground_offset": 0.035,
+      "lane_offset": 0.6,
+      "sample_spacing": 1.0,
+      "smoothing_iterations": 2,
+      "usage": "traffic_vehicle",
+      "license": "External vehicle model; verify redistribution terms before public release"
+    },
+    {
       "id": "planter_box_proc_01",
       "name": "Planter Box Procedural",
       "category": "roadside_asset",

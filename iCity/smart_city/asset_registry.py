@@ -78,6 +78,19 @@ def is_procedural_asset(asset: dict[str, Any]) -> bool:
     return str(asset.get("path", "")).startswith("procedural://")
 
 
+def blend_asset_target(asset: dict[str, Any]) -> tuple[str, str]:
+    collection_name = str(asset.get("collection_name", "")).strip()
+    if collection_name:
+        return ("collection", collection_name)
+
+    object_name = str(asset.get("object_name", "")).strip()
+    if object_name:
+        return ("object", object_name)
+
+    asset_id = str(asset.get("id", ""))
+    raise AssetRegistryError(f"blend asset missing collection_name/object_name: {asset_id}")
+
+
 def apply_road_texture(
     asset_id: str,
     target_material_name: str,
@@ -126,16 +139,25 @@ def append_object_asset(
         raise AssetRegistryError(f"object file does not exist: {object_path}")
 
     suffix = object_path.suffix.lower()
+    target_kind = "object"
     if suffix == ".blend":
-        object_name = asset.get("object_name")
-        if not object_name:
-            raise AssetRegistryError(f"blend asset missing object_name: {asset_id}")
+        target_kind, target_name = blend_asset_target(asset)
         with bpy.data.libraries.load(str(object_path), link=False) as (data_from, data_to):
-            if object_name not in data_from.objects:
-                raise AssetRegistryError(f"object {object_name} not found in {object_path}")
-            data_to.objects = [object_name]
-        obj = data_to.objects[0]
-        bpy.context.collection.objects.link(obj)
+            if target_kind == "collection":
+                if target_name not in data_from.collections:
+                    raise AssetRegistryError(f"collection {target_name} not found in {object_path}")
+                data_to.collections = [target_name]
+            else:
+                if target_name not in data_from.objects:
+                    raise AssetRegistryError(f"object {target_name} not found in {object_path}")
+                data_to.objects = [target_name]
+
+        if target_kind == "collection":
+            obj = data_to.collections[0]
+            bpy.context.collection.children.link(obj)
+        else:
+            obj = data_to.objects[0]
+            bpy.context.collection.objects.link(obj)
     elif suffix == ".obj":
         before = set(bpy.data.objects)
         bpy.ops.wm.obj_import(filepath=str(object_path))
@@ -145,6 +167,9 @@ def append_object_asset(
         obj = created[0]
     else:
         raise AssetRegistryError(f"unsupported object asset format: {object_path.suffix}")
+
+    if target_kind == "collection":
+        return obj
 
     obj.location = location
     obj.rotation_euler = rotation

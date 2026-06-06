@@ -24,6 +24,18 @@ else:
         assert spec.loader is not None
         spec.loader.exec_module(ecology_common)
 
+if "asset_registry" in locals():
+    importlib.reload(asset_registry)
+else:
+    try:
+        from . import asset_registry
+    except ImportError:
+        module_path = Path(__file__).resolve().with_name("asset_registry.py")
+        spec = importlib.util.spec_from_file_location("traffic_extension_asset_registry", module_path)
+        asset_registry = importlib.util.module_from_spec(spec)
+        assert spec.loader is not None
+        spec.loader.exec_module(asset_registry)
+
 
 ICITY_ROOT_COLLECTION = ecology_common.ICITY_ROOT_COLLECTION
 ICITY_BASE_OBJECT = ecology_common.ICITY_BASE_OBJECT
@@ -44,6 +56,15 @@ TRAFFIC_CAR_MATERIAL = "ICITY_TRAFFIC_Car_Material"
 TRAFFIC_TAXI_MATERIAL = "ICITY_TRAFFIC_Taxi_Material"
 TRAFFIC_BUS_MATERIAL = "ICITY_TRAFFIC_Bus_Material"
 TRAFFIC_PEDESTRIAN_MATERIAL = "ICITY_TRAFFIC_Pedestrian_Material"
+TRAFFIC_BUNDLED_VEHICLE_ASSET_ID = "vehicle_chevrolet_m1009_01"
+TRAFFIC_BUNDLED_VEHICLE_DEFAULTS = {
+    "rotation_z_correction": math.pi * 0.5,
+    "scale_ratio": 0.54,
+    "ground_offset": 0.035,
+    "lane_offset": 0.6,
+    "sample_spacing": 1.0,
+    "smoothing_iterations": 2,
+}
 
 
 def _clamp(value: float, minimum: float, maximum: float) -> float:
@@ -287,6 +308,218 @@ def _pedestrian_material() -> bpy.types.Material:
     return _build_flat_material(TRAFFIC_PEDESTRIAN_MATERIAL, (0.84, 0.58, 0.40, 1.0), roughness=0.66)
 
 
+def _manifest_object_asset(asset_id: str) -> dict | None:
+    try:
+        manifest = asset_registry.load_manifest()
+        return asset_registry.get_object_asset(manifest, asset_id)
+    except Exception:
+        return None
+
+
+def bundled_vehicle_profile(vehicle_type: str) -> dict:
+    profile = dict(TRAFFIC_BUNDLED_VEHICLE_DEFAULTS)
+    if vehicle_type not in {"CAR", "TAXI"}:
+        return profile
+
+    asset = _manifest_object_asset(TRAFFIC_BUNDLED_VEHICLE_ASSET_ID) or {}
+    for key in tuple(profile.keys()):
+        if key in asset:
+            profile[key] = asset[key]
+    return profile
+
+
+def _lerp_point(a: Vector, b: Vector, factor: float) -> Vector:
+    return a * (1.0 - factor) + b * factor
+
+
+def _resample_polyline(points: list[Vector], spacing: float) -> list[Vector]:
+    if len(points) <= 2:
+        return [_copy_vector(point) for point in points]
+
+    spacing = max(float(spacing), 0.1)
+    result = [_copy_vector(points[0])]
+    remaining = spacing
+    current = _copy_vector(points[0])
+
+    for next_point in points[1:]:
+        segment_start = current
+        segment_end = _copy_vector(next_point)
+        segment = segment_end - segment_start
+        segment_length = segment.length
+
+        while segment_length >= remaining and segment_length > 0.0:
+            factor = remaining / segment_length
+            sample = _lerp_point(segment_start, segment_end, factor)
+            result.append(sample)
+            segment_start = sample
+            segment = segment_end - segment_start
+            segment_length = segment.length
+            remaining = spacing
+
+        remaining -= segment_length
+        current = segment_end
+
+    if not _vector_equals(result[-1], points[-1]):
+        result.append(_copy_vector(points[-1]))
+    return result
+
+
+def _smooth_open_polyline(points: list[Vector], iterations: int) -> list[Vector]:
+    smoothed = [_copy_vector(point) for point in points]
+    for _ in range(max(int(iterations), 0)):
+        if len(smoothed) <= 2:
+            break
+        refined = [_copy_vector(smoothed[0])]
+        for index in range(len(smoothed) - 1):
+            start = smoothed[index]
+            end = smoothed[index + 1]
+            q_point = start * 0.75 + end * 0.25
+            r_point = start * 0.25 + end * 0.75
+            if index == 0:
+                refined.append(r_point)
+            elif index == len(smoothed) - 2:
+                refined.append(q_point)
+            else:
+                refined.extend((q_point, r_point))
+        refined.append(_copy_vector(smoothed[-1]))
+        smoothed = refined
+    return smoothed
+
+
+def prepare_vehicle_path(
+    chain: list[Vector],
+    *,
+    lane_offset: float,
+    sample_spacing: float,
+    smoothing_iterations: int,
+) -> list[Vector]:
+    if len(chain) <= 2:
+        if abs(lane_offset) > 1e-6:
+            return _offset_chain(chain, lane_offset)
+        return [_copy_vector(point) for point in chain]
+
+    prepared = _offset_chain(chain, lane_offset) if abs(lane_offset) > 1e-6 else [_copy_vector(point) for point in chain]
+    prepared = _resample_polyline(prepared, sample_spacing)
+    prepared = _smooth_open_polyline(prepared, smoothing_iterations)
+    return _resample_polyline(prepared, sample_spacing)
+
+
+def _append_collection_hierarchy(manifest: dict, asset: dict, collection) -> dict:
+    object_path = asset_registry.resolve_asset_path(manifest, asset)
+    if not object_path.exists():
+        raise asset_registry.AssetRegistryError(f"object file does not exist: {object_path}")
+
+    target_kind, target_name = asset_registry.blend_asset_target(asset)
+    if target_kind != "collection":
+        raise asset_registry.AssetRegistryError(f"traffic vehicle asset must use collection target: {asset.get('id', '')}")
+
+    with bpy.data.libraries.load(str(object_path), link=False) as (data_from, data_to):
+        if target_name not in data_from.collections:
+            raise asset_registry.AssetRegistryError(f"collection {target_name} not found in {object_path}")
+        data_to.collections = [target_name]
+
+    appended_collection = data_to.collections[0]
+    collection.children.link(appended_collection)
+
+    members = list(appended_collection.objects)
+    root_name = str(asset.get("object_name", "")).strip()
+    root = next((obj for obj in members if obj.name == root_name), None)
+    if root is None:
+        root = next((obj for obj in members if obj.parent is None), None)
+    if root is None:
+        raise asset_registry.AssetRegistryError(f"collection asset has no usable root object: {asset.get('id', '')}")
+
+    for obj in members:
+        obj.hide_render = True
+        obj.hide_viewport = True
+        obj.hide_select = True
+
+    return {"collection": appended_collection, "root": root, "members": members}
+
+
+def _load_bundled_vehicle_template(vehicle_type: str, collection):
+    if vehicle_type not in {"CAR", "TAXI"}:
+        return None
+
+    try:
+        manifest = asset_registry.load_manifest()
+        asset = asset_registry.get_object_asset(manifest, TRAFFIC_BUNDLED_VEHICLE_ASSET_ID)
+        return _append_collection_hierarchy(manifest, asset, collection)
+    except Exception:
+        return None
+
+
+def _copy_hierarchy_member(source, name: str):
+    obj = source.copy()
+    if getattr(source, "animation_data", None) is not None:
+        obj.animation_data_clear()
+    obj.name = name
+    return obj
+
+
+def _create_collection_vehicle_follower(
+    *,
+    name: str,
+    collection,
+    vehicle_type: str,
+    template: dict,
+    path_obj,
+    frame_start: int,
+    frame_end: int,
+    phase_start: float,
+    scale: float,
+    rotation_z_correction: float,
+    ground_offset: float,
+) -> bpy.types.Object:
+    carrier = bpy.data.objects.new(f"{name}_Carrier", None)
+    carrier.empty_display_type = "PLAIN_AXES"
+    carrier.empty_display_size = 0.12
+    carrier.hide_render = True
+    carrier.hide_select = True
+    collection.objects.link(carrier)
+
+    path_points_world = [Vector((point.co.x, point.co.y, point.co.z)) for point in path_obj.data.splines[0].points]
+    ecology_common.keyframe_path_motion(
+        carrier,
+        path_points_world,
+        path_obj.location,
+        frame_start,
+        frame_end,
+        phase_start,
+        sample_count=max(12, len(path_points_world)),
+    )
+
+    duplicates = {}
+    root_source = template["root"]
+    root_clone = None
+    for source in template["members"]:
+        clone = _copy_hierarchy_member(source, f"{name}_{source.name}")
+        collection.objects.link(clone)
+        clone.hide_render = False
+        clone.hide_viewport = False
+        clone.hide_select = False
+        duplicates[source] = clone
+        if source == root_source:
+            root_clone = clone
+
+    if root_clone is None:
+        raise RuntimeError(f"Vehicle template root missing for {vehicle_type}")
+
+    for source, clone in duplicates.items():
+        parent = source.parent
+        if parent in duplicates:
+            clone.parent = duplicates[parent]
+        else:
+            clone.parent = carrier
+        if hasattr(source, "matrix_parent_inverse") and hasattr(source.matrix_parent_inverse, "copy"):
+            clone.matrix_parent_inverse = source.matrix_parent_inverse.copy()
+
+    root_clone.location = Vector((0.0, 0.0, ground_offset))
+    root_clone.rotation_euler = (0.0, 0.0, rotation_z_correction)
+    root_clone.scale = (scale, scale, scale)
+    return root_clone
+
+
 def _vehicle_mesh(vehicle_type: str, scale: float) -> tuple[list[tuple[float, float, float]], list[tuple[int, ...]]]:
     if vehicle_type == "BUS":
         vertices = [
@@ -462,14 +695,37 @@ def _generate_vehicles(settings, path_collection, vehicle_collection, surface_po
     total = max(len(sequence), 1)
     base_vehicle_scale = _clamp(getattr(settings, "vehicle_scale", 0.78), 0.3, 2.4)
     bus_scale = _clamp(getattr(settings, "bus_scale", 1.18), 0.5, 3.0)
+    vehicle_templates: dict[str, dict | None] = {}
 
     for index, vehicle_type in enumerate(sequence):
         phase = index / total
         path_obj = path_outer if vehicle_type == "BUS" else path_inner
         mesh_scale = bus_scale if vehicle_type == "BUS" else base_vehicle_scale
+        profile = bundled_vehicle_profile(vehicle_type)
+        template = vehicle_templates.get(vehicle_type)
+        if vehicle_type not in vehicle_templates:
+            template = _load_bundled_vehicle_template(vehicle_type, vehicle_collection)
+            vehicle_templates[vehicle_type] = template
+        name = f"ICITY_TRAFFIC_{vehicle_type}_{index + 1}"
+        if template is not None:
+            _create_collection_vehicle_follower(
+                name=name,
+                collection=vehicle_collection,
+                vehicle_type=vehicle_type,
+                template=template,
+                path_obj=path_obj,
+                frame_start=frame_start,
+                frame_end=frame_end,
+                phase_start=phase,
+                scale=mesh_scale * float(profile["scale_ratio"]),
+                rotation_z_correction=float(profile["rotation_z_correction"]),
+                ground_offset=float(profile["ground_offset"]),
+            )
+            continue
+
         vertices, faces = _vehicle_mesh(vehicle_type, mesh_scale)
         ecology_common.create_follower(
-            name=f"ICITY_TRAFFIC_{vehicle_type}_{index + 1}",
+            name=name,
             collection=vehicle_collection,
             mesh_vertices=vertices,
             mesh_faces=faces,
@@ -510,29 +766,86 @@ def _generate_vehicles_on_road_paths(settings, path_collection, vehicle_collecti
     base_vehicle_scale = _clamp(getattr(settings, "vehicle_scale", 0.78), 0.3, 2.4)
     bus_scale = _clamp(getattr(settings, "bus_scale", 1.18), 0.5, 3.0)
 
-    route_paths = []
+    passenger_profile = bundled_vehicle_profile("CAR")
+    bus_profile = bundled_vehicle_profile("BUS")
+    passenger_route_paths = []
+    bus_route_paths = []
+    lane_offset = abs(float(passenger_profile["lane_offset"]))
+    passenger_offsets = (lane_offset, -lane_offset) if lane_offset > 1e-6 else (0.0,)
+
     for route_index, road_path in enumerate(road_paths):
-        motion_points = vehicle_motion_points_from_chain(road_path)
-        if len(motion_points) < 2:
-            continue
-        path_obj = ecology_common.create_follow_path(
-            f"ICITY_TRAFFIC_RoadPath_{route_index + 1}",
-            motion_points,
-            path_collection,
-            Vector((0.0, 0.0, 0.0)),
-            frame_count,
+        prepared_bus_path = prepare_vehicle_path(
+            road_path,
+            lane_offset=0.0,
+            sample_spacing=float(bus_profile["sample_spacing"]),
+            smoothing_iterations=int(bus_profile["smoothing_iterations"]),
         )
-        route_paths.append(path_obj)
-    if not route_paths:
+        bus_motion_points = vehicle_motion_points_from_chain(prepared_bus_path)
+        if len(bus_motion_points) >= 2:
+            path_obj = ecology_common.create_follow_path(
+                f"ICITY_TRAFFIC_RoadPath_Bus_{route_index + 1}",
+                bus_motion_points,
+                path_collection,
+                Vector((0.0, 0.0, 0.0)),
+                frame_count,
+            )
+            bus_route_paths.append(path_obj)
+
+        for lane_index, offset in enumerate(passenger_offsets):
+            prepared_path = prepare_vehicle_path(
+                road_path,
+                lane_offset=offset,
+                sample_spacing=float(passenger_profile["sample_spacing"]),
+                smoothing_iterations=int(passenger_profile["smoothing_iterations"]),
+            )
+            motion_points = vehicle_motion_points_from_chain(prepared_path)
+            if len(motion_points) < 2:
+                continue
+            path_obj = ecology_common.create_follow_path(
+                f"ICITY_TRAFFIC_RoadPath_{route_index + 1}_Lane_{lane_index + 1}",
+                motion_points,
+                path_collection,
+                Vector((0.0, 0.0, 0.0)),
+                frame_count,
+            )
+            passenger_route_paths.append(path_obj)
+
+    if not passenger_route_paths and not bus_route_paths:
         return
 
     total = max(len(sequence), 1)
+    vehicle_templates: dict[str, dict | None] = {}
     for index, vehicle_type in enumerate(sequence):
-        path_obj = route_paths[index % len(route_paths)]
+        path_pool = bus_route_paths if vehicle_type == "BUS" and bus_route_paths else passenger_route_paths or bus_route_paths
+        if not path_pool:
+            continue
+        path_obj = path_pool[index % len(path_pool)]
         mesh_scale = bus_scale if vehicle_type == "BUS" else base_vehicle_scale
+        profile = bundled_vehicle_profile(vehicle_type)
+        template = vehicle_templates.get(vehicle_type)
+        if vehicle_type not in vehicle_templates:
+            template = _load_bundled_vehicle_template(vehicle_type, vehicle_collection)
+            vehicle_templates[vehicle_type] = template
+        name = f"ICITY_TRAFFIC_{vehicle_type}_{index + 1}"
+        if template is not None:
+            _create_collection_vehicle_follower(
+                name=name,
+                collection=vehicle_collection,
+                vehicle_type=vehicle_type,
+                template=template,
+                path_obj=path_obj,
+                frame_start=frame_start,
+                frame_end=frame_end,
+                phase_start=index / total,
+                scale=mesh_scale * float(profile["scale_ratio"]),
+                rotation_z_correction=float(profile["rotation_z_correction"]),
+                ground_offset=float(profile["ground_offset"]),
+            )
+            continue
+
         vertices, faces = _vehicle_mesh(vehicle_type, mesh_scale)
         ecology_common.create_follower(
-            name=f"ICITY_TRAFFIC_{vehicle_type}_{index + 1}",
+            name=name,
             collection=vehicle_collection,
             mesh_vertices=vertices,
             mesh_faces=faces,

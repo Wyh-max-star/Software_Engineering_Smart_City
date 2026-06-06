@@ -11,6 +11,14 @@ It generates:
 - moving buses
 - moving pedestrians
 
+For `Cars` and `Taxis`, the module now prefers the bundled Chevrolet traffic vehicle asset:
+
+- asset id: `vehicle_chevrolet_m1009_01`
+- asset file: `iCity/assets/vehicles/1986_chevrolet_m1009.blend`
+- import mode: collection-based `.blend` asset
+
+If that asset cannot be loaded, the module falls back to the existing procedural proxy vehicle so the panel still works.
+
 The module is independent from `ICity Ecology`.
 
 ## How To Use In Blender
@@ -64,6 +72,7 @@ Expected:
 
 - cars / taxis / buses follow the generated city road network
 - pedestrians appear near the same road corridors
+- cars / taxis use the bundled Chevrolet model when the asset is present
 - if no readable road graph is available, the module falls back to the outer demo bands
 
 ### Validation 2: Animation
