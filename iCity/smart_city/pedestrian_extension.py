@@ -302,33 +302,6 @@ def _import_fbx_template(fbx_path: Path, collection: bpy.types.Collection) -> di
     }
 
 
-def _make_phase_variants(action, count: int) -> list:
-    """Create phase-shifted copies of a looping action for crowd variety.
-
-    All variants keep the CYCLES f-modifier of the source action, so they loop
-    seamlessly; they merely start the cycle at a different point so a row of
-    walkers does not move its legs in perfect unison.
-    """
-
-    if action is None or count <= 1:
-        return [action]
-
-    frame_start, frame_end = action.frame_range
-    length = max(frame_end - frame_start, 1.0)
-    variants = [action]
-    for variant_index in range(1, count):
-        shift = length * (variant_index / count)
-        variant = action.copy()
-        for fcurve in variant.fcurves:
-            for keyframe in fcurve.keyframe_points:
-                keyframe.co.x += shift
-                keyframe.handle_left.x += shift
-                keyframe.handle_right.x += shift
-            fcurve.update()
-        variants.append(variant)
-    return variants
-
-
 def _instantiate_rig(template: dict, collection: bpy.types.Collection) -> dict:
     """Create a lightweight copy of a template rig linked into ``collection``.
 
@@ -368,9 +341,13 @@ def _attach_rig(
     facing_offset: float,
     height_factor: float,
     lateral: float,
-    action_override=None,
 ) -> dict:
-    """Mount a fresh rig copy under ``anchor`` with facing / scale correction."""
+    """Mount a fresh rig copy under ``anchor`` with facing / scale correction.
+
+    The rig copy keeps the looping action it inherited from the template via
+    ``obj.copy()`` (including its slot binding), so every instance plays the
+    walk / idle clip without any fragile per-instance action reassignment.
+    """
 
     mount = _create_empty(f"{anchor.name}_Mount", collection)
     mount.parent = anchor
@@ -381,12 +358,6 @@ def _attach_rig(
     copies = _instantiate_rig(template, collection)
     for root in template["roots"]:
         copies[root].parent = mount
-
-    if action_override is not None and template["armature"] is not None:
-        armature_copy = copies[template["armature"]]
-        if armature_copy.animation_data is None:
-            armature_copy.animation_data_create()
-        armature_copy.animation_data.action = action_override
     return copies
 
 
@@ -413,7 +384,6 @@ def _spawn_walkers(
     speed_variation = _clamp(getattr(settings, "walk_speed_variation", 0.3), 0.0, 0.9)
     lateral_jitter = max(getattr(settings, "lateral_jitter", 0.25), 0.0)
 
-    variants = _make_phase_variants(template["action"], min(4, walker_count))
     spawned = 0
     for index in range(walker_count):
         route = routes[index % len(routes)]
@@ -434,16 +404,7 @@ def _spawn_walkers(
         )
 
         lateral = rng.uniform(-lateral_jitter, lateral_jitter)
-        action_override = variants[index % len(variants)] if variants else None
-        _attach_rig(
-            template,
-            collection,
-            carrier,
-            facing_offset,
-            height_factor,
-            lateral,
-            action_override=action_override,
-        )
+        _attach_rig(template, collection, carrier, facing_offset, height_factor, lateral)
         spawned += 1
     return spawned
 
@@ -460,7 +421,6 @@ def _spawn_idlers(
     rng = random.Random(int(getattr(settings, "seed", 0)) + 202)
     height_factor = _height_factor(template, settings.person_height)
     facing_offset = math.radians(settings.facing_offset_deg)
-    variants = _make_phase_variants(template["action"], min(3, len(idle_spots)))
 
     spawned = 0
     for index, (position, facing) in enumerate(idle_spots):
@@ -468,16 +428,7 @@ def _spawn_idlers(
         anchor.location = position
         anchor.rotation_euler = (0.0, 0.0, facing + rng.uniform(-0.25, 0.25))
 
-        action_override = variants[index % len(variants)] if variants else None
-        _attach_rig(
-            template,
-            collection,
-            anchor,
-            facing_offset,
-            height_factor,
-            0.0,
-            action_override=action_override,
-        )
+        _attach_rig(template, collection, anchor, facing_offset, height_factor, 0.0)
         spawned += 1
     return spawned
 
