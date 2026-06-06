@@ -78,6 +78,7 @@ Expected:
 - cars / taxis / buses follow the generated city road network
 - pedestrians appear near the same road corridors
 - cars / taxis use the bundled Chevrolet model when the asset is present
+- buses use the bundled low-poly bus model when the asset is present
 - if no readable road graph is available, the module falls back to the outer demo bands
 
 ### Validation 2: Animation
