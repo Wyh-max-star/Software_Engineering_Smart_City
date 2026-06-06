@@ -12,11 +12,20 @@ def _load_pedestrians(tag):
 
 
 class PedestrianExtensionTests(unittest.TestCase):
-    def test_sidewalk_offset_accounts_for_road_half_width(self):
-        pedestrian_extension = _load_pedestrians("offset")
+    def test_normalize_band_orders_and_clamps(self):
+        pedestrian_extension = _load_pedestrians("band")
 
-        self.assertAlmostEqual(pedestrian_extension.sidewalk_offset(3.4, 1.6), 3.3)
-        self.assertAlmostEqual(pedestrian_extension.sidewalk_offset(0.0, 2.0), 2.0)
+        self.assertEqual(pedestrian_extension.normalize_band(4.0, 6.0), (4.0, 6.0))
+        self.assertEqual(pedestrian_extension.normalize_band(6.0, 4.0), (4.0, 6.0))
+        self.assertEqual(pedestrian_extension.normalize_band(-2.0, 5.0), (0.0, 5.0))
+
+    def test_band_distances_span_near_to_far(self):
+        pedestrian_extension = _load_pedestrians("banddist")
+
+        distances = pedestrian_extension.band_distances(4.0, 6.0, lanes=3)
+
+        self.assertEqual(distances, [4.0, 5.0, 6.0])
+        self.assertEqual(pedestrian_extension.band_distances(5.0, 5.0, lanes=3), [5.0])
 
     def test_polyline_loop_length_wraps_closed(self):
         pedestrian_extension = _load_pedestrians("looplen")
@@ -29,43 +38,44 @@ class PedestrianExtensionTests(unittest.TestCase):
 
         self.assertAlmostEqual(pedestrian_extension.polyline_loop_length(square), 8.0)
 
-    def test_plan_sidewalk_routes_creates_two_opposing_sides(self):
+    def test_plan_sidewalk_routes_fill_band_on_both_sides(self):
         pedestrian_extension = _load_pedestrians("routes")
         chain = [Vector((0.0, 0.0, 0.0)), Vector((5.0, 0.0, 0.0)), Vector((10.0, 0.0, 0.0))]
 
-        routes = pedestrian_extension.plan_sidewalk_routes([chain], offset=3.3, z_lift=0.05)
+        routes = pedestrian_extension.plan_sidewalk_routes([chain], near=4.0, far=6.0, z_lift=0.05)
 
-        self.assertEqual(len(routes), 2)
-        self.assertEqual(routes[0]["side"], 1.0)
-        self.assertEqual(routes[1]["side"], -1.0)
-        # The two sidewalks sit on opposite sides of the centreline.
-        self.assertGreater(routes[0]["points"][0].y, 3.0)
-        self.assertLess(routes[1]["points"][0].y, -3.0)
-        # Every sidewalk point keeps off the road (≈ offset away laterally).
+        # 3 lanes per side, both sides present.
+        self.assertEqual({route["side"] for route in routes}, {1.0, -1.0})
+        self.assertEqual(len(routes), 6)
+        # Every walking line stays inside the [near, far] band off the centreline.
         for route in routes:
             for point in route["points"]:
-                self.assertGreaterEqual(abs(point.y), 3.2)
+                self.assertGreaterEqual(abs(point.y) + 1e-6, 4.0)
+                self.assertLessEqual(abs(point.y) - 1e-6, 6.0)
                 self.assertAlmostEqual(point.z, 0.05)
 
     def test_plan_sidewalk_routes_reverses_one_side_for_two_way_flow(self):
         pedestrian_extension = _load_pedestrians("routes_flow")
         chain = [Vector((0.0, 0.0, 0.0)), Vector((5.0, 0.0, 0.0)), Vector((10.0, 0.0, 0.0))]
 
-        routes = pedestrian_extension.plan_sidewalk_routes([chain], offset=3.3, z_lift=0.0)
+        routes = pedestrian_extension.plan_sidewalk_routes([chain], near=4.0, far=4.0, z_lift=0.0)
 
-        forward = [(point.x) for point in routes[0]["points"]]
-        backward = [(point.x) for point in routes[1]["points"]]
+        plus = next(route for route in routes if route["side"] == 1.0)
+        minus = next(route for route in routes if route["side"] == -1.0)
+        forward = [point.x for point in plus["points"]]
+        backward = [point.x for point in minus["points"]]
         self.assertEqual(backward, list(reversed(forward)))
 
-    def test_plan_idle_spots_offsets_people_onto_sidewalk(self):
+    def test_plan_idle_spots_place_people_inside_band(self):
         pedestrian_extension = _load_pedestrians("idle")
         chain = [Vector((0.0, 0.0, 0.0)), Vector((5.0, 0.0, 0.0)), Vector((10.0, 0.0, 0.0))]
 
-        spots = pedestrian_extension.plan_idle_spots([chain], offset=3.3, idle_count=2, seed=3, z_lift=0.05)
+        spots = pedestrian_extension.plan_idle_spots([chain], near=4.0, far=6.0, idle_count=3, seed=3, z_lift=0.05)
 
-        self.assertEqual(len(spots), 2)
+        self.assertEqual(len(spots), 3)
         for position, facing in spots:
-            self.assertAlmostEqual(abs(position.y), 3.3)
+            self.assertGreaterEqual(abs(position.y) + 1e-6, 4.0)
+            self.assertLessEqual(abs(position.y) - 1e-6, 6.0)
             self.assertAlmostEqual(position.z, 0.05)
             self.assertIsInstance(facing, float)
 
@@ -73,14 +83,70 @@ class PedestrianExtensionTests(unittest.TestCase):
         pedestrian_extension = _load_pedestrians("idle_count")
         chain = [Vector((0.0, 0.0, 0.0)), Vector((5.0, 0.0, 0.0)), Vector((10.0, 0.0, 0.0))]
 
-        self.assertEqual(pedestrian_extension.plan_idle_spots([chain], 3.3, 0, 3, 0.05), [])
-        self.assertEqual(len(pedestrian_extension.plan_idle_spots([chain], 3.3, 1, 3, 0.05)), 1)
+        self.assertEqual(pedestrian_extension.plan_idle_spots([chain], 4.0, 6.0, 0, 3, 0.05), [])
+        self.assertEqual(len(pedestrian_extension.plan_idle_spots([chain], 4.0, 6.0, 1, 3, 0.05)), 1)
+
+    def test_plan_idle_spots_never_sits_on_an_intersection_node(self):
+        pedestrian_extension = _load_pedestrians("idle_nodes")
+        # Endpoints (0,0) and (10,0) are road intersections; nobody should idle there.
+        chain = [Vector((0.0, 0.0, 0.0)), Vector((5.0, 0.0, 0.0)), Vector((10.0, 0.0, 0.0))]
+
+        spots = pedestrian_extension.plan_idle_spots([chain], near=4.0, far=6.0, idle_count=3, seed=1, z_lift=0.0)
+
+        node_xs = {0.0, 10.0}
+        for position, _ in spots:
+            self.assertNotIn(position.x, node_xs)
+
+    def test_corner_vertex_flags_marks_bends_not_straights(self):
+        pedestrian_extension = _load_pedestrians("corner_flags")
+
+        straight = [Vector((float(i), 0.0, 0.0)) for i in range(6)]
+        self.assertEqual(pedestrian_extension.corner_vertex_flags(straight), [False] * 6)
+
+        # An L-shaped chain turning 90 degrees at the middle vertex.
+        bend = [
+            Vector((0.0, 0.0, 0.0)),
+            Vector((5.0, 0.0, 0.0)),
+            Vector((10.0, 0.0, 0.0)),
+            Vector((10.0, 5.0, 0.0)),
+            Vector((10.0, 10.0, 0.0)),
+        ]
+        flags = pedestrian_extension.corner_vertex_flags(bend)
+        self.assertTrue(flags[2])  # the corner vertex itself
+        self.assertFalse(flags[0])  # endpoints never flagged
+        self.assertFalse(flags[-1])
+
+    def test_plan_idle_spots_skips_road_corners(self):
+        pedestrian_extension = _load_pedestrians("idle_corner")
+
+        # A long straight road, and the same road bent 90 degrees half way along.
+        straight = [Vector((float(i) * 4.0, 0.0, 0.0)) for i in range(9)]
+        bent = list(straight)
+        for i in range(5, 9):
+            bent[i] = Vector((16.0, float(i - 4) * 4.0, 0.0))
+
+        # idle_count high so truncation doesn't hide the difference in anchor count.
+        straight_spots = pedestrian_extension.plan_idle_spots([straight], 4.0, 6.0, 1000, 1, 0.0)
+        bent_spots = pedestrian_extension.plan_idle_spots([bent], 4.0, 6.0, 1000, 1, 0.0)
+
+        self.assertGreater(len(bent_spots), 0)  # straight stretches still get idlers
+        self.assertLess(len(bent_spots), len(straight_spots))  # the corner is avoided
+
+    def test_drifts_monotonically_distinguishes_locomotion_from_bob(self):
+        pedestrian_extension = _load_pedestrians("drift")
+
+        # Steady forward march -> drift.
+        self.assertTrue(pedestrian_extension._drifts_monotonically([0.0, 0.5, 1.0, 1.5, 2.0]))
+        # Hip bob returns to where it started -> not drift.
+        self.assertFalse(pedestrian_extension._drifts_monotonically([0.0, 0.1, 0.0, -0.1, 0.0]))
+        # A dead-flat channel is not drift either.
+        self.assertFalse(pedestrian_extension._drifts_monotonically([0.3, 0.3, 0.3]))
 
     def test_fallback_routes_used_when_no_road_graph(self):
         pedestrian_extension = _load_pedestrians("fallback")
 
         routes = pedestrian_extension.plan_fallback_loop_routes(
-            Vector((0.0, 0.0, 0.0)), city_radius=30.0, ground_z=0.0, sidewalk_margin=1.6, z_lift=0.05
+            Vector((0.0, 0.0, 0.0)), city_radius=30.0, ground_z=0.0, near=4.0, far=6.0, z_lift=0.05
         )
 
         self.assertEqual(len(routes), 2)

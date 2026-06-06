@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(\"/d/Programming/anaconda3/python.exe\" -m unittest discover -s tests -p \"test_smart_city*.py\")",
+      "Bash(cp added/ecology_extension.py iCity/smart_city/ecology_extension.py)",
+      "Bash(cp added/ecology_water.py iCity/smart_city/ecology_water.py)"
+    ]
+  }
+}

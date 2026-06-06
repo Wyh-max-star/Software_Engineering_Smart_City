@@ -63,6 +63,7 @@ ICITY_ROOT_COLLECTION = ecology_common.ICITY_ROOT_COLLECTION
 get_or_create_child_collection = ecology_common.get_or_create_child_collection
 add_cycles_modifier = ecology_common.add_cycles_modifier
 set_linear_interpolation = ecology_common.set_linear_interpolation
+iter_action_fcurves = ecology_common.iter_action_fcurves
 object_world_bounds = ecology_common.object_world_bounds
 merge_bounds = ecology_common.merge_bounds
 ellipse_points = ecology_common.ellipse_points
@@ -91,10 +92,26 @@ def _clamp(value: float, minimum: float, maximum: float) -> float:
 # ---------------------------------------------------------------------------
 
 
-def sidewalk_offset(road_width: float, sidewalk_margin: float) -> float:
-    """Lateral distance from a road centreline to the pedestrian sidewalk."""
+SIDEWALK_LANES = 3
 
-    return max(road_width, 0.0) * 0.5 + max(sidewalk_margin, 0.0)
+
+def normalize_band(near: float, far: float) -> tuple[float, float]:
+    """Return a sane (near, far) sidewalk band: non-negative and near <= far."""
+
+    near = max(near, 0.0)
+    far = max(far, 0.0)
+    if far < near:
+        near, far = far, near
+    return near, far
+
+
+def band_distances(near: float, far: float, lanes: int = SIDEWALK_LANES) -> list[float]:
+    """Evenly spaced walking-line distances spanning the sidewalk band."""
+
+    near, far = normalize_band(near, far)
+    if lanes <= 1 or far == near:
+        return [(near + far) * 0.5]
+    return [near + (far - near) * (index / (lanes - 1)) for index in range(lanes)]
 
 
 def _segment_normal(previous_point: Vector, next_point: Vector) -> Vector:
@@ -116,31 +133,33 @@ def polyline_loop_length(points: list[Vector]) -> float:
 
 def plan_sidewalk_routes(
     road_paths: list[list[Vector]],
-    offset: float,
+    near: float,
+    far: float,
     z_lift: float,
 ) -> list[dict]:
     """Build walkable sidewalk routes flanking every road chain.
 
-    ``offset`` is the lateral distance from the road centreline to the middle of
-    the sidewalk (ideally read from the iCity ``Road lanes width`` /
-    ``side walk offset`` attributes so people land on the pavement, not the
-    roadway). Each road chain yields two routes, one per side, travelling in
-    opposite directions so foot traffic mimics real keep-to-one-side pavements.
+    The sidewalk is the band between ``near`` and ``far`` metres from the road
+    centreline. For each road chain and each side we lay several walking lines
+    spread across that band, so walkers fill the pavement. The two sides travel
+    in opposite directions, mimicking real keep-to-one-side foot traffic.
     """
 
+    distances = band_distances(near, far)
     routes: list[dict] = []
     for chain in road_paths:
         if len(chain) < 2:
             continue
         for side in (1.0, -1.0):
-            shifted = traffic_extension._offset_chain(chain, offset * side)
-            motion_points = traffic_extension.vehicle_motion_points_from_chain(shifted)
-            if side < 0.0:
-                motion_points = list(reversed(motion_points))
-            if len(motion_points) < 2:
-                continue
-            lifted = [Vector((point.x, point.y, point.z + z_lift)) for point in motion_points]
-            routes.append({"points": lifted, "side": side})
+            for distance in distances:
+                shifted = traffic_extension._offset_chain(chain, distance * side)
+                motion_points = traffic_extension.vehicle_motion_points_from_chain(shifted)
+                if side < 0.0:
+                    motion_points = list(reversed(motion_points))
+                if len(motion_points) < 2:
+                    continue
+                lifted = [Vector((point.x, point.y, point.z + z_lift)) for point in motion_points]
+                routes.append({"points": lifted, "side": side, "distance": distance})
     return routes
 
 
@@ -148,70 +167,132 @@ def plan_fallback_loop_routes(
     center: Vector,
     city_radius: float,
     ground_z: float,
-    sidewalk_margin: float,
+    near: float,
+    far: float,
     z_lift: float,
 ) -> list[dict]:
     """Outer ring sidewalks used when the scene exposes no readable road graph."""
 
-    base = city_radius + max(sidewalk_margin, 1.5) + 4.0
-    minor_floor = city_radius + max(sidewalk_margin, 1.5)
+    near, far = normalize_band(near, far)
     routes: list[dict] = []
-    for ring_index, side in enumerate((1.0, -1.0)):
-        radius_x = base + ring_index * 2.2
-        radius_y = max(base * 0.82, minor_floor) + ring_index * 1.8
+    for side, distance in ((1.0, near), (-1.0, far)):
+        radius = city_radius + max(distance, 1.5)
         loop = ellipse_points(
             Vector((center.x, center.y)),
-            radius_x,
-            radius_y,
+            radius,
+            max(radius * 0.82, city_radius + 1.0),
             0.0,
             64,
             ground_z + z_lift,
         )
         if side < 0.0:
             loop = list(reversed(loop))
-        routes.append({"points": loop, "side": side})
+        routes.append({"points": loop, "side": side, "distance": distance})
     return routes
+
+
+def _idle_candidate(
+    point: Vector,
+    previous_point: Vector,
+    next_point: Vector,
+    near: float,
+    far: float,
+    rng: random.Random,
+    z_lift: float,
+) -> tuple[Vector, float]:
+    """Push one anchor onto the sidewalk band and face it back toward the road."""
+
+    normal = _segment_normal(previous_point, next_point)
+    side = 1.0 if rng.random() < 0.5 else -1.0
+    # Stand dead-centre of the band so idlers are guaranteed within [near, far].
+    distance = (near + far) * 0.5
+    position = Vector(
+        (
+            point.x + normal.x * distance * side,
+            point.y + normal.y * distance * side,
+            point.z + z_lift,
+        )
+    )
+    # Face back toward the road centreline (opposite the offset normal).
+    facing = math.atan2(-normal.y * side, -normal.x * side)
+    return position, facing
+
+
+def corner_vertex_flags(chain: list[Vector], window: int = 2, total_turn_deg: float = 30.0) -> list[bool]:
+    """Mark chain vertices that sit on a road bend (a corner).
+
+    iCity rounds the city's corners, so the road centreline curves there; pushing
+    a sidewalk point outward at such a bend overshoots the rounded edge and hangs
+    over the void. A vertex is flagged when the road turns by more than
+    ``total_turn_deg`` within ``window`` vertices of it — this catches both a
+    single sharp corner and a rounded one spread over several small turns.
+    Endpoints are never flagged (they are intersections handled separately).
+    """
+
+    count = len(chain)
+    flags = [False] * count
+    if count < 3:
+        return flags
+
+    turns = [0.0] * count
+    for index in range(1, count - 1):
+        incoming = chain[index] - chain[index - 1]
+        outgoing = chain[index + 1] - chain[index]
+        cross = incoming.x * outgoing.y - incoming.y * outgoing.x
+        dot = incoming.x * outgoing.x + incoming.y * outgoing.y
+        turns[index] = abs(math.atan2(cross, dot))
+
+    threshold = math.radians(total_turn_deg)
+    for index in range(1, count - 1):
+        low = max(1, index - window)
+        high = min(count - 2, index + window)
+        if sum(turns[neighbour] for neighbour in range(low, high + 1)) > threshold:
+            flags[index] = True
+    return flags
 
 
 def plan_idle_spots(
     road_paths: list[list[Vector]],
-    offset: float,
+    near: float,
+    far: float,
     idle_count: int,
     seed: int,
     z_lift: float,
 ) -> list[tuple[Vector, float]]:
-    """Pick standing spots at intersections / corners facing the street.
+    """Pick standing spots along the straight parts of the sidewalk band.
 
-    Anchors are taken from chain endpoints (which are road intersections) and a
-    mid-chain point. Each anchor is pushed onto the sidewalk by ``offset`` and
-    the person is rotated to look back toward the road, like waiting at a crossing.
+    Anchors are sampled *off* the road nodes — at segment midpoints and interior
+    vertices — never at the chain endpoints (intersections) and never on a road
+    bend (a corner), so idlers don't end up standing in a crossing road or hung
+    over the void at the city's rounded corners. Each kept anchor is pushed the
+    same ``[near, far]`` distance onto the pavement that the walkers use.
     """
 
     if idle_count <= 0 or not road_paths:
         return []
 
+    near, far = normalize_band(near, far)
     rng = random.Random(seed)
     candidates: list[tuple[Vector, float]] = []
     for chain in road_paths:
         if len(chain) < 2:
             continue
-        anchor_indices = {0, len(chain) - 1, len(chain) // 2}
-        for index in sorted(anchor_indices):
-            point = chain[index]
-            previous_point = chain[max(index - 1, 0)]
-            next_point = chain[min(index + 1, len(chain) - 1)]
-            normal = _segment_normal(previous_point, next_point)
-            side = 1.0 if rng.random() < 0.5 else -1.0
-            position = Vector(
-                (
-                    point.x + normal.x * offset * side,
-                    point.y + normal.y * offset * side,
-                    point.z + z_lift,
-                )
-            )
-            # Face back toward the road centreline (opposite the offset normal).
-            facing = math.atan2(-normal.y * side, -normal.x * side)
-            candidates.append((position, facing))
+        is_corner = corner_vertex_flags(chain)
+        anchors: list[tuple[Vector, Vector, Vector]] = []
+        # Segment midpoints — skip a segment touching a corner vertex.
+        for index in range(len(chain) - 1):
+            if is_corner[index] or is_corner[index + 1]:
+                continue
+            a, b = chain[index], chain[index + 1]
+            mid = Vector(((a.x + b.x) * 0.5, (a.y + b.y) * 0.5, (a.z + b.z) * 0.5))
+            anchors.append((mid, a, b))
+        # Interior vertices, skipping the endpoints and any corner vertex.
+        for index in range(1, len(chain) - 1):
+            if is_corner[index]:
+                continue
+            anchors.append((chain[index], chain[index - 1], chain[index + 1]))
+        for point, previous_point, next_point in anchors:
+            candidates.append(_idle_candidate(point, previous_point, next_point, near, far, rng, z_lift))
 
     rng.shuffle(candidates)
     return candidates[:idle_count]
@@ -221,13 +302,15 @@ def plan_fallback_idle_spots(
     center: Vector,
     city_radius: float,
     ground_z: float,
-    sidewalk_margin: float,
+    near: float,
+    far: float,
     idle_count: int,
     z_lift: float,
 ) -> list[tuple[Vector, float]]:
     if idle_count <= 0:
         return []
-    base = city_radius + max(sidewalk_margin, 1.5) + 4.0
+    near, far = normalize_band(near, far)
+    base = city_radius + (near + far) * 0.5
     spots: list[tuple[Vector, float]] = []
     for index in range(idle_count):
         angle = (index / max(idle_count, 1)) * math.tau
@@ -249,6 +332,111 @@ def plan_fallback_idle_spots(
 # ---------------------------------------------------------------------------
 
 
+def _drifts_monotonically(values: list[float]) -> bool:
+    """True if a channel trends one way (locomotion) rather than oscillating.
+
+    A forward-walking root translates steadily across the clip, so its net
+    displacement is large relative to its overall range. A hip bob or sway
+    returns to where it started, so its net displacement is tiny next to its
+    range. We use that contrast to tell root motion apart from pose motion.
+    """
+
+    if len(values) < 2:
+        return False
+    net = abs(values[-1] - values[0])
+    amplitude = max(values) - min(values)
+    return net > 0.01 and net > 0.5 * amplitude
+
+
+def _root_bone_names(armature) -> set:
+    data = getattr(armature, "data", None) if armature is not None else None
+    return {bone.name for bone in getattr(data, "bones", []) if getattr(bone, "parent", None) is None}
+
+
+def _flatten_fcurve(fcurve) -> None:
+    points = fcurve.keyframe_points
+    if not len(points):
+        return
+    base = points[0].co[1]
+    for keyframe in points:
+        keyframe.co[1] = base
+        keyframe.handle_left[1] = base
+        keyframe.handle_right[1] = base
+    fcurve.update()
+
+
+def _strip_root_motion(armature, action) -> None:
+    """Pin a walk/idle clip in place by removing forward locomotion drift.
+
+    The bundled character clips translate the whole body forward; once the clip
+    loops (``add_cycles_modifier``) the body snaps back to the clip's start,
+    which reads as the pedestrian teleporting every few dozen frames. The
+    carrier empty is what actually moves a pedestrian through the world, so any
+    root location channel that drifts one way (rather than oscillating like a
+    hip bob) is flattened, leaving an in-place stride the carrier can transport.
+    """
+
+    if action is None:
+        return
+    roots = _root_bone_names(armature)
+    for fcurve in iter_action_fcurves(action):
+        data_path = getattr(fcurve, "data_path", "")
+        is_object_location = data_path == "location"
+        is_root_bone_location = data_path.endswith(".location") and any(
+            f'bones["{name}"]' in data_path for name in roots
+        )
+        if not (is_object_location or is_root_bone_location):
+            continue
+        values = [keyframe.co[1] for keyframe in fcurve.keyframe_points]
+        if _drifts_monotonically(values):
+            _flatten_fcurve(fcurve)
+
+
+def _center_template_horizontally(roots: list, armature, action, merged) -> None:
+    """Slide a character so its horizontal footprint sits on its anchor.
+
+    The bundled clips do not always pose the character over the armature origin,
+    so an instance placed at an anchor can render up to ~half a metre to the
+    side. With a narrow sidewalk band (e.g. 6.3-6.8 m) that drift is enough to
+    push a *standing* idler clean out of the band. We measure the footprint
+    centre at import and move every root by the negative of that offset — through
+    the object's location channel if the armature animates it, otherwise through
+    its static location — so the rendered body lands exactly on the anchor.
+    """
+
+    if merged is None:
+        return
+    cx = (merged[0].x + merged[1].x) * 0.5
+    cy = (merged[0].y + merged[1].y) * 0.5
+    # A large offset means the rig imported somewhere unexpected; leave it rather
+    # than risk flinging every pedestrian across the map.
+    if max(abs(cx), abs(cy)) > 3.0:
+        return
+
+    animated_axes = set()
+    if armature is not None and action is not None:
+        for fcurve in iter_action_fcurves(action):
+            if getattr(fcurve, "data_path", "") != "location":
+                continue
+            axis = getattr(fcurve, "array_index", -1)
+            if axis not in (0, 1):
+                continue
+            shift = cx if axis == 0 else cy
+            for keyframe in fcurve.keyframe_points:
+                keyframe.co[1] -= shift
+                keyframe.handle_left[1] -= shift
+                keyframe.handle_right[1] -= shift
+            fcurve.update()
+            animated_axes.add(axis)
+
+    for root in roots:
+        is_armature = root is armature
+        if not (is_armature and 0 in animated_axes):
+            root.location.x -= cx
+        if not (is_armature and 1 in animated_axes):
+            root.location.y -= cy
+
+
 def _create_empty(name: str, collection: bpy.types.Collection) -> bpy.types.Object:
     empty = bpy.data.objects.new(name, None)
     empty.empty_display_type = "PLAIN_AXES"
@@ -259,53 +447,7 @@ def _create_empty(name: str, collection: bpy.types.Collection) -> bpy.types.Obje
     return empty
 
 
-def read_pedestrian_offset_from_scene():
-    """Read the real sidewalk offset from the iCity base-mesh edge attributes.
-
-    iCity stores ``Road lanes width`` (total roadway width) and
-    ``side walk offset`` (sidewalk width) per road edge. Placing pedestrians at
-    ``roadway_half_width + sidewalk_width / 2`` puts them on the centre of the
-    pavement instead of on the road / parking lane. Returns ``None`` when the
-    attributes are unavailable so callers can fall back to panel values.
-    """
-
-    base = traffic_extension.get_base_object()
-    mesh = getattr(base, "data", None)
-    attributes = getattr(mesh, "attributes", None)
-    if attributes is None:
-        return None
-
-    road_deleted = attributes.get("Road del")
-    lanes_width = attributes.get("Road lanes width")
-    if road_deleted is None or lanes_width is None:
-        return None
-    sidewalk = attributes.get("side walk offset")
-
-    scale = 1.0
-    matrix_world = getattr(base, "matrix_world", None)
-    if matrix_world is not None and hasattr(matrix_world, "to_scale"):
-        world_scale = matrix_world.to_scale()
-        scale = (abs(world_scale.x) + abs(world_scale.y)) * 0.5
-
-    road_data = getattr(road_deleted, "data", [])
-    lane_data = getattr(lanes_width, "data", [])
-    sidewalk_data = getattr(sidewalk, "data", None)
-
-    offsets: list[float] = []
-    for index in range(min(len(road_data), len(lane_data))):
-        deleted = bool(getattr(road_data[index], "value", getattr(road_data[index], "value_bool", True)))
-        if deleted:
-            continue
-        width = float(getattr(lane_data[index], "value", 0.0))
-        sidewalk_width = 0.0
-        if sidewalk_data is not None and index < len(sidewalk_data):
-            sidewalk_width = float(getattr(sidewalk_data[index], "value", 0.0))
-        offsets.append((width * 0.5 + sidewalk_width * 0.5) * scale)
-
-    if not offsets:
-        return None
-    offsets.sort()
-    return offsets[len(offsets) // 2]
+MOTION_SAMPLE_STEP = 6
 
 
 def _keyframe_pedestrian_motion(
@@ -315,15 +457,13 @@ def _keyframe_pedestrian_motion(
     frame_end: int,
     phase_start: float,
     speed_per_frame: float,
-    stop_chance: float,
-    rng: random.Random,
 ) -> None:
-    """Walk the carrier along ``path_points`` with occasional pauses.
+    """Walk the carrier steadily along ``path_points`` at a constant speed.
 
-    The carrier advances at a constant ``speed_per_frame`` (world units / frame),
-    but every so often holds its position for a short while, producing natural
-    stop-and-go foot traffic. The character's own walk cycle keeps looping, so a
-    held position reads as someone pausing on the spot.
+    The carrier advances at ``speed_per_frame`` (world units / frame) without
+    pausing, so every walker keeps moving the whole animation. Keyframes are
+    sampled often enough (``MOTION_SAMPLE_STEP``) to follow road curves and keep
+    the character facing its direction of travel.
     """
 
     loop_length = max(polyline_loop_length(path_points), 0.001)
@@ -336,30 +476,21 @@ def _keyframe_pedestrian_motion(
         delta = ahead - here
         return math.atan2(delta.y, delta.x)
 
-    def place(phase: float, frame: int, heading: float) -> None:
+    def place(phase: float, frame: int) -> None:
         point = ecology_common._sample_path_point(path_points, phase % 1.0)
         carrier.location = Vector((point.x, point.y, point.z))
-        carrier.rotation_euler = (0.0, 0.0, heading)
+        carrier.rotation_euler = (0.0, 0.0, heading_at(phase))
         carrier.keyframe_insert(data_path="location", frame=frame)
         carrier.keyframe_insert(data_path="rotation_euler", frame=frame)
 
     phase = phase_start
-    heading = heading_at(phase)
-    place(phase, frame_start, heading)
+    place(phase, frame_start)
 
     frame = frame_start
     while frame < frame_end:
-        if stop_chance > 0.0 and rng.random() < stop_chance:
-            pause = rng.randint(18, 60)
-            next_frame = min(frame + pause, frame_end)
-            place(phase, next_frame, heading)  # hold position -> a stop
-            frame = next_frame
-            continue
-        step = rng.randint(24, 80)
-        next_frame = min(frame + step, frame_end)
-        heading = heading_at(phase)
+        next_frame = min(frame + MOTION_SAMPLE_STEP, frame_end)
         phase += phase_per_frame * (next_frame - frame)
-        place(phase, next_frame, heading)
+        place(phase, next_frame)
         frame = next_frame
 
     action = carrier.animation_data.action if carrier.animation_data else None
@@ -400,11 +531,15 @@ def _import_fbx_template(fbx_path: Path, collection: bpy.types.Collection) -> di
     if armature is not None and armature.animation_data is not None:
         action = armature.animation_data.action
         if action is not None:
+            _strip_root_motion(armature, action)
             add_cycles_modifier(action)
 
     bounds_objects = mesh_objects or new_objects
     merged = merge_bounds(object_world_bounds(obj) for obj in bounds_objects)
     world_height = max(merged[1].z - merged[0].z, 0.001) if merged is not None else DEFAULT_PERSON_HEIGHT
+
+    # Pull the body onto the armature origin so instances land on their anchors.
+    _center_template_horizontally(roots, armature, action, merged)
 
     return {
         "objects": new_objects,
@@ -495,10 +630,8 @@ def _spawn_walkers(
     frame_end = settings.animation_end
     height_factor = _height_factor(template, settings.person_height)
     facing_offset = math.radians(settings.facing_offset_deg)
-    base_speed = max(getattr(settings, "walk_speed", 0.06), 0.001)
+    base_speed = max(getattr(settings, "walk_speed", 0.2), 0.001)
     speed_variation = _clamp(getattr(settings, "walk_speed_variation", 0.3), 0.0, 0.9)
-    stop_chance = _clamp(getattr(settings, "stop_chance", 0.3), 0.0, 0.95)
-    lateral_jitter = max(getattr(settings, "lateral_jitter", 0.25), 0.0)
 
     spawned = 0
     for index in range(walker_count):
@@ -514,11 +647,9 @@ def _spawn_walkers(
             frame_end,
             phase,
             speed,
-            stop_chance,
-            rng,
         )
 
-        lateral = rng.uniform(-lateral_jitter, lateral_jitter)
+        lateral = rng.uniform(-0.2, 0.2)
         _attach_rig(template, collection, carrier, facing_offset, height_factor, lateral)
         spawned += 1
     return spawned
@@ -613,20 +744,16 @@ def generate_pedestrians(context: bpy.types.Context) -> dict:
     stand_template = _import_fbx_template(STANDING_FBX, source_collection)
 
     z_lift = 0.05
+    near, far = normalize_band(settings.sidewalk_near, settings.sidewalk_far)
     road_paths = traffic_extension.extract_vehicle_road_paths_from_scene()
     if road_paths:
-        measured = read_pedestrian_offset_from_scene()
-        if measured is not None and measured > 0.0:
-            offset = measured + settings.sidewalk_margin
-        else:
-            offset = settings.road_width * 0.5 + max(settings.sidewalk_margin, 1.5)
-        routes = plan_sidewalk_routes(road_paths, offset, z_lift)
-        idle_spots = plan_idle_spots(road_paths, offset, settings.idle_count, int(settings.seed), z_lift)
+        routes = plan_sidewalk_routes(road_paths, near, far, z_lift)
+        idle_spots = plan_idle_spots(road_paths, near, far, settings.idle_count, int(settings.seed), z_lift)
     else:
         center, city_radius, ground_z = get_city_bounds()
-        routes = plan_fallback_loop_routes(center, city_radius, ground_z, settings.sidewalk_margin, z_lift)
+        routes = plan_fallback_loop_routes(center, city_radius, ground_z, near, far, z_lift)
         idle_spots = plan_fallback_idle_spots(
-            center, city_radius, ground_z, settings.sidewalk_margin, settings.idle_count, z_lift
+            center, city_radius, ground_z, near, far, settings.idle_count, z_lift
         )
 
     walkers = _spawn_walkers(routes, walk_template, walker_collection, path_collection, settings)
@@ -635,7 +762,13 @@ def generate_pedestrians(context: bpy.types.Context) -> dict:
     context.scene.frame_start = settings.animation_start
     context.scene.frame_end = settings.animation_end
     context.scene.frame_set(settings.animation_start)
-    return {"walkers": walkers, "idlers": idlers, "used_road_graph": bool(road_paths)}
+    return {
+        "walkers": walkers,
+        "idlers": idlers,
+        "used_road_graph": bool(road_paths),
+        "near": near,
+        "far": far,
+    }
 
 
 class ICITY_PedestrianSettings(PropertyGroup):
@@ -645,19 +778,19 @@ class ICITY_PedestrianSettings(PropertyGroup):
     walker_count: IntProperty(name="Walkers", default=16, min=0, max=200)
     idle_count: IntProperty(name="Idlers", default=8, min=0, max=120)
 
-    road_width: FloatProperty(
-        name="Road Width",
-        description="Fallback roadway width when the iCity road attributes cannot be read",
-        default=3.4,
-        min=1.0,
-        max=12.0,
+    sidewalk_near: FloatProperty(
+        name="Sidewalk Near",
+        description="Nearest distance from the road centreline that pedestrians may walk (inner edge of the pavement)",
+        default=6.3,
+        min=0.0,
+        max=40.0,
     )
-    sidewalk_margin: FloatProperty(
-        name="Sidewalk Nudge",
-        description="Extra outward offset added to the auto-detected sidewalk (negative moves toward the road)",
-        default=0.0,
-        min=-3.0,
-        max=8.0,
+    sidewalk_far: FloatProperty(
+        name="Sidewalk Far",
+        description="Farthest distance from the road centreline that pedestrians may walk (outer edge of the pavement)",
+        default=6.8,
+        min=0.0,
+        max=40.0,
     )
 
     person_height: FloatProperty(name="Person Height (m)", default=DEFAULT_PERSON_HEIGHT, min=0.5, max=3.0)
@@ -666,19 +799,11 @@ class ICITY_PedestrianSettings(PropertyGroup):
     walk_speed: FloatProperty(
         name="Walk Speed",
         description="Walking speed in world units per frame (lower = slower)",
-        default=0.06,
+        default=0.2,
         min=0.005,
         max=0.5,
     )
     walk_speed_variation: FloatProperty(name="Speed Variation", default=0.3, min=0.0, max=0.9)
-    stop_chance: FloatProperty(
-        name="Stop Chance",
-        description="How often walkers pause (walk-and-stop); 0 = never stop",
-        default=0.3,
-        min=0.0,
-        max=0.95,
-    )
-    lateral_jitter: FloatProperty(name="Lateral Jitter", default=0.25, min=0.0, max=2.0)
     seed: IntProperty(name="Seed", default=7, min=0, max=100000)
 
 
@@ -705,7 +830,11 @@ class ICITY_OT_GeneratePedestrians(Operator):
         source = "road graph" if result["used_road_graph"] else "outer ring fallback"
         self.report(
             {"INFO"},
-            f"ICity pedestrians generated ({result['walkers']} walkers, {result['idlers']} idlers, {source}).",
+            (
+                f"ICity pedestrians: {result['walkers']} walkers, {result['idlers']} idlers, {source}; "
+                f"sidewalk band {result['near']:.1f}-{result['far']:.1f} m from road centre. "
+                "Adjust 'Sidewalk Near/Far' to move them onto the pavement."
+            ),
         )
         return {"FINISHED"}
 
@@ -743,16 +872,14 @@ class ICITY_PT_PedestrianPanel(Panel):
         count_box.prop(settings, "idle_count")
 
         layout_box = layout.box()
-        layout_box.label(text="Sidewalks", icon="ORIENTATION_VIEW")
-        layout_box.prop(settings, "sidewalk_margin")
-        layout_box.prop(settings, "road_width")
+        layout_box.label(text="Sidewalk Band (from road centre)", icon="ORIENTATION_VIEW")
+        layout_box.prop(settings, "sidewalk_near")
+        layout_box.prop(settings, "sidewalk_far")
 
         move_box = layout.box()
         move_box.label(text="Movement", icon="FORCE_FORCE")
         move_box.prop(settings, "walk_speed")
         move_box.prop(settings, "walk_speed_variation")
-        move_box.prop(settings, "stop_chance")
-        move_box.prop(settings, "lateral_jitter")
 
         look_box = layout.box()
         look_box.label(text="Characters", icon="POSE_HLT")
