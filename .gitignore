@@ -12,3 +12,12 @@ __pycache__/
 # OS/editor noise.
 .DS_Store
 Thumbs.db
+
+# LLM 私密密钥，绝不提交。
+llm_key.txt
+iCity/smart_city/manifests/llm_key.txt
+
+# 前端构建产物与依赖（前端另有自带 .gitignore，这里再兜底一层）。
+frontend/node_modules/
+frontend/dist/
+frontend/*.log
