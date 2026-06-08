@@ -31,9 +31,9 @@ import os
 from bpy.app.handlers import persistent
 
 try:
-    from .smart_city import asset_extension, ecology_extension, traffic_extension, pedestrian_extension
+    from .smart_city import asset_extension, ecology_extension, traffic_extension, pedestrian_extension, layout_control
 except ImportError:
-    from smart_city import asset_extension, ecology_extension, traffic_extension, pedestrian_extension
+    from smart_city import asset_extension, ecology_extension, traffic_extension, pedestrian_extension, layout_control
 
 
 addon_keymaps = {}
@@ -1481,6 +1481,13 @@ class SNA_OT_Start_5209E(bpy.types.Operator):
         return not False
 
     def execute(self, context):
+        # ``wm.append`` cannot run while Blender is in mesh Edit Mode. Users
+        # commonly leave the default cube or an existing ICity Base in Edit
+        # Mode before pressing Start, which previously produced the opaque
+        # "Operator bpy.ops.wm.append.poll() failed, context is incorrect"
+        # error. Return to Object Mode before loading the bundled city assets.
+        if bpy.context.mode != 'OBJECT':
+            bpy.ops.object.mode_set(mode='OBJECT')
         before_data = list(bpy.data.collections)
         bpy.ops.wm.append(directory=os.path.join(os.path.dirname(__file__), 'assets', 'ICity start.blend') + r'\Collection', filename='ICity', link=False)
         new_data = list(filter(lambda d: not d in before_data, list(bpy.data.collections)))
@@ -3434,6 +3441,7 @@ def register():
     asset_extension.register()
     traffic_extension.register()
     pedestrian_extension.register()
+    layout_control.register()
     kc = bpy.context.window_manager.keyconfigs.addon
     km = kc.keymaps.new(name='Window', space_type='EMPTY')
     kmi = km.keymap_items.new('sna.open_addon_prefrences_34afe', 'M', 'PRESS',
@@ -3443,6 +3451,7 @@ def register():
 
 def unregister():
     global _icons
+    layout_control.unregister()
     pedestrian_extension.unregister()
     traffic_extension.unregister()
     asset_extension.unregister()

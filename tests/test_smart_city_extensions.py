@@ -101,11 +101,11 @@ def install_blender_stubs(vector_cls=Vector):
     bpy.context = types.SimpleNamespace()
 
     props = types.ModuleType("bpy.props")
-    for name in ("BoolProperty", "EnumProperty", "FloatProperty", "IntProperty", "PointerProperty"):
+    for name in ("BoolProperty", "CollectionProperty", "EnumProperty", "FloatProperty", "IntProperty", "PointerProperty", "StringProperty"):
         setattr(props, name, lambda *args, **kwargs: None)
 
     bpy_types = types.ModuleType("bpy.types")
-    for name in ("Operator", "Panel", "PropertyGroup", "Collection", "Object", "Material", "Action", "Node"):
+    for name in ("Operator", "Panel", "PropertyGroup", "UIList", "Collection", "Object", "Material", "Action", "Node"):
         setattr(bpy_types, name, type(name, (), {}))
 
     mathutils = types.ModuleType("mathutils")
@@ -219,6 +219,194 @@ class SmartCityExtensionTests(unittest.TestCase):
 
         self.assertEqual(len(chains), 1)
         self.assertEqual([(point.x, point.y, point.z) for point in chains[0]], [(0.0, 0.0, 0.0), (5.0, 0.0, 0.0), (10.0, 0.0, 0.0)])
+
+    def test_layout_contract_inspector_reports_mesh_attributes(self):
+        layout_control = load_module("layout_control_contract", "iCity/smart_city/layout_control.py")
+
+        class BlenderPropertyArray:
+            def __iter__(self):
+                return iter((1.0, 2.0, 3.0))
+
+        class BlenderVector:
+            x = 5.0
+            y = 0.0
+            z = 0.0
+
+        mesh = types.SimpleNamespace(
+            vertices=[
+                types.SimpleNamespace(co=(0.0, 0.0, 0.0)),
+                types.SimpleNamespace(co=BlenderVector()),
+                types.SimpleNamespace(co=(5.0, 5.0, 0.0)),
+            ],
+            edges=[
+                types.SimpleNamespace(vertices=(0, 1)),
+                types.SimpleNamespace(vertices=(1, 2)),
+            ],
+            polygons=[types.SimpleNamespace(vertices=(0, 1, 2))],
+            attributes=[
+                types.SimpleNamespace(
+                    name="Road del",
+                    domain="EDGE",
+                    data_type="BOOLEAN",
+                    data=[
+                        types.SimpleNamespace(value=False),
+                        types.SimpleNamespace(value=True),
+                    ],
+                ),
+                types.SimpleNamespace(
+                    name="space type",
+                    domain="FACE",
+                    data_type="INT",
+                    data=[types.SimpleNamespace(value=0)],
+                ),
+                types.SimpleNamespace(
+                    name="position sample",
+                    domain="POINT",
+                    data_type="FLOAT_VECTOR",
+                    data=[types.SimpleNamespace(value=BlenderPropertyArray())],
+                ),
+            ],
+        )
+
+        report = layout_control.inspect_mesh_contract(mesh)
+
+        self.assertEqual(report["vertices"], 3)
+        self.assertEqual(report["edges"], 2)
+        self.assertEqual(report["polygons"], 1)
+        self.assertEqual(report["attributes"][0]["name"], "Road del")
+        self.assertEqual(report["attributes"][0]["samples"], [False, True])
+        self.assertEqual(report["attributes"][1]["name"], "space type")
+        self.assertEqual(report["attributes"][2]["samples"], [[1.0, 2.0, 3.0]])
+        self.assertEqual(report["node_rows"][1]["coordinate"], [5.0, 0.0, 0.0])
+        self.assertEqual(report["edge_rows"][0]["vertices"], [0, 1])
+        self.assertTrue(report["edge_rows"][0]["enabled_as_road"])
+        self.assertFalse(report["edge_rows"][1]["enabled_as_road"])
+        self.assertEqual(report["face_rows"][0]["vertices"], [0, 1, 2])
+        layout_control.format_contract_report(report)
+
+    def test_layout_coordinate_components_tolerates_unexpected_values(self):
+        layout_control = load_module("layout_control_coordinates", "iCity/smart_city/layout_control.py")
+
+        self.assertEqual(layout_control._coordinate_components("not-a-coordinate"), (0.0, 0.0, 0.0))
+        self.assertEqual(layout_control._coordinate_components(("1.5", 2, None)), (1.5, 2.0, 0.0))
+
+    def test_layout_control_registers_phase_zero_panel_and_operator(self):
+        layout_control = load_module("layout_control_classes", "iCity/smart_city/layout_control.py")
+
+        class_names = [cls.__name__ for cls in layout_control.CLASSES]
+
+        self.assertIn("ICITY_OT_InspectLayoutContract", class_names)
+        self.assertIn("ICITY_OT_ExportLayoutGraph", class_names)
+        self.assertIn("ICITY_OT_LoadLayoutDraftFromBase", class_names)
+        self.assertIn("ICITY_OT_ExportLayoutDraft", class_names)
+        self.assertIn("ICITY_UL_LayoutNodeList", class_names)
+        self.assertIn("ICITY_UL_LayoutEdgeList", class_names)
+        self.assertIn("ICITY_PT_LayoutControlPanel", class_names)
+
+    def test_layout_contract_summary_groups_domains_and_known_attributes(self):
+        layout_control = load_module("layout_control_summary", "iCity/smart_city/layout_control.py")
+        report = {
+            "attributes": [
+                {"name": "Road del", "domain": "EDGE", "data_type": "BOOLEAN", "length": 4},
+                {"name": "Road lanes width", "domain": "EDGE", "data_type": "FLOAT", "length": 4},
+                {"name": "space type", "domain": "FACE", "data_type": "INT", "length": 1},
+                {"name": "custom", "domain": "POINT", "data_type": "FLOAT", "length": 4},
+            ]
+        }
+
+        grouped = layout_control.group_attributes_by_domain(report)
+        known = layout_control.key_attribute_status(report)
+
+        self.assertEqual(len(grouped["EDGE"]), 2)
+        self.assertEqual(len(grouped["FACE"]), 1)
+        self.assertEqual(len(grouped["POINT"]), 1)
+        self.assertEqual(
+            [attribute["name"] for attribute in known],
+            ["Road del", "Road lanes width", "space type"],
+        )
+
+    def test_layout_graph_export_uses_stable_node_and_edge_ids(self):
+        layout_control = load_module("layout_control_export", "iCity/smart_city/layout_control.py")
+        report = {
+            "node_rows": [
+                {"index": 0, "coordinate": [0.0, 0.0, 0.0]},
+                {"index": 1, "coordinate": [10.0, 0.0, 0.0]},
+            ],
+            "edge_rows": [
+                {"index": 0, "vertices": [0, 1], "enabled_as_road": True},
+            ],
+            "face_rows": [
+                {"index": 0, "vertices": [0, 1]},
+            ],
+        }
+
+        graph = layout_control.build_layout_graph_export(report)
+
+        self.assertEqual(graph["version"], 1)
+        self.assertEqual(graph["source"], layout_control.ICITY_BASE_OBJECT)
+        self.assertEqual(graph["nodes"][0]["id"], "n0")
+        self.assertEqual(graph["nodes"][1]["x"], 10.0)
+        self.assertEqual(graph["edges"][0]["id"], "e0")
+        self.assertEqual(graph["edges"][0]["start"], "n0")
+        self.assertEqual(graph["edges"][0]["end"], "n1")
+        self.assertTrue(graph["edges"][0]["enabled_as_road"])
+        self.assertEqual(graph["faces"][0]["vertices"], ["n0", "n1"])
+        layout_control.format_layout_graph_export(graph)
+
+    def test_layout_graph_validation_reports_missing_nodes_and_self_loops(self):
+        layout_control = load_module("layout_control_validate", "iCity/smart_city/layout_control.py")
+        graph = {
+            "nodes": [
+                {"id": "n0", "x": 0.0, "y": 0.0},
+                {"id": "n0", "x": 1.0, "y": 0.0},
+            ],
+            "edges": [
+                {"id": "e0", "start": "n0", "end": "n0"},
+                {"id": "e1", "start": "n0", "end": "missing"},
+            ],
+            "faces": [],
+        }
+
+        validation = layout_control.validate_layout_graph(graph)
+
+        self.assertTrue(any("Duplicate node id" in error for error in validation["errors"]))
+        self.assertTrue(any("Self-loop edge" in error for error in validation["errors"]))
+        self.assertTrue(any("missing end node" in error for error in validation["errors"]))
+        self.assertTrue(validation["warnings"])
+
+    def test_layout_draft_populates_and_exports_scene_collections(self):
+        layout_control = load_module("layout_control_draft", "iCity/smart_city/layout_control.py")
+
+        class FakeCollection(list):
+            def add(self):
+                item = types.SimpleNamespace()
+                self.append(item)
+                return item
+
+        scene = types.SimpleNamespace(
+            icity_layout_nodes=FakeCollection(),
+            icity_layout_edges=FakeCollection(),
+        )
+        graph = {
+            "nodes": [
+                {"id": "n0", "source_index": 0, "x": 0.0, "y": 0.0, "z": 0.0},
+                {"id": "n1", "source_index": 1, "x": 10.0, "y": 0.0, "z": 0.0},
+            ],
+            "edges": [
+                {"id": "e0", "source_index": 0, "start": "n0", "end": "n1", "enabled_as_road": True},
+            ],
+        }
+
+        layout_control.populate_layout_draft(scene, graph)
+        exported = layout_control.build_layout_graph_from_draft(scene)
+
+        self.assertEqual(len(scene.icity_layout_nodes), 2)
+        self.assertEqual(scene.icity_layout_nodes[1].node_id, "n1")
+        self.assertEqual(scene.icity_layout_nodes[1].x, 10.0)
+        self.assertEqual(len(scene.icity_layout_edges), 1)
+        self.assertEqual(scene.icity_layout_edges[0].start_node_id, "n0")
+        self.assertEqual(exported["nodes"][1]["id"], "n1")
+        self.assertEqual(exported["edges"][0]["end"], "n1")
 
     def test_vehicle_motion_points_from_open_chain_ping_pong_without_shortcut(self):
         traffic_extension = load_module("traffic_extension_pingpong", "iCity/smart_city/traffic_extension.py")
