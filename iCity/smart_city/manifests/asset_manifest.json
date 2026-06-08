@@ -112,6 +112,22 @@
       "path": "procedural://shrub_patch_proc_01",
       "usage": "ecology_asset",
       "license": "Team procedural asset"
+    },
+    {
+      "id": "person_walking_fbx_01",
+      "name": "Pedestrian Walking Character",
+      "category": "pedestrian_asset",
+      "path": "assets/Assets/Default/People/Walking.fbx",
+      "usage": "pedestrian_walker",
+      "license": "Existing iCity classroom project asset"
+    },
+    {
+      "id": "person_standing_fbx_01",
+      "name": "Pedestrian Standing Character",
+      "category": "pedestrian_asset",
+      "path": "assets/Assets/Default/People/Standing.fbx",
+      "usage": "pedestrian_idler",
+      "license": "Existing iCity classroom project asset"
     }
   ]
 }

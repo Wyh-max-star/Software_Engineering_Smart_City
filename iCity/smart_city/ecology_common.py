@@ -406,10 +406,47 @@ def create_strip_from_closed_points(
     return create_mesh_object(name, vertices, faces, collection, location, material)
 
 
+def iter_action_fcurves(action) -> list:
+    """Return every F-curve of an action across Blender API generations.
+
+    Blender 4.4+/5.x replaced the flat ``Action.fcurves`` list with the slotted
+    ``layers -> strips -> channelbags`` hierarchy, and ``Action.fcurves`` is now
+    absent on slotted actions. We try the legacy accessor first (older Blender
+    and the deprecated shim) and otherwise walk the slotted structure.
+    """
+
+    if action is None:
+        return []
+
+    legacy = getattr(action, "fcurves", None)
+    if legacy:
+        return list(legacy)
+
+    collected: list = []
+    for layer in getattr(action, "layers", []):
+        for strip in getattr(layer, "strips", []):
+            channelbags = getattr(strip, "channelbags", None)
+            if channelbags is not None:
+                for bag in channelbags:
+                    collected.extend(bag.fcurves)
+                continue
+            channelbag = getattr(strip, "channelbag", None)
+            if channelbag is None:
+                continue
+            for slot in getattr(action, "slots", []):
+                try:
+                    bag = channelbag(slot)
+                except (TypeError, RuntimeError):
+                    bag = None
+                if bag is not None:
+                    collected.extend(bag.fcurves)
+    return collected
+
+
 def set_linear_interpolation(action: bpy.types.Action | None) -> None:
     if action is None:
         return
-    for fcurve in action.fcurves:
+    for fcurve in iter_action_fcurves(action):
         for keyframe in fcurve.keyframe_points:
             keyframe.interpolation = "LINEAR"
 
@@ -417,7 +454,9 @@ def set_linear_interpolation(action: bpy.types.Action | None) -> None:
 def add_cycles_modifier(action: bpy.types.Action | None) -> None:
     if action is None:
         return
-    for fcurve in action.fcurves:
+    for fcurve in iter_action_fcurves(action):
+        if any(modifier.type == "CYCLES" for modifier in fcurve.modifiers):
+            continue
         modifier = fcurve.modifiers.new(type="CYCLES")
         modifier.mode_before = "REPEAT"
         modifier.mode_after = "REPEAT"
