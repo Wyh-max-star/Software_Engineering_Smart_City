@@ -299,6 +299,12 @@ class SmartCityExtensionTests(unittest.TestCase):
         self.assertIn("ICITY_OT_ExportLayoutGraph", class_names)
         self.assertIn("ICITY_OT_LoadLayoutDraftFromBase", class_names)
         self.assertIn("ICITY_OT_ExportLayoutDraft", class_names)
+        self.assertIn("ICITY_OT_AddLayoutDraftNode", class_names)
+        self.assertIn("ICITY_OT_RemoveLayoutDraftNode", class_names)
+        self.assertIn("ICITY_OT_AddLayoutDraftEdge", class_names)
+        self.assertIn("ICITY_OT_RemoveLayoutDraftEdge", class_names)
+        self.assertIn("ICITY_OT_ValidateLayoutDraft", class_names)
+        self.assertIn("ICITY_OT_NormalizeLayoutDraft", class_names)
         self.assertIn("ICITY_UL_LayoutNodeList", class_names)
         self.assertIn("ICITY_UL_LayoutEdgeList", class_names)
         self.assertIn("ICITY_PT_LayoutControlPanel", class_names)
@@ -363,6 +369,7 @@ class SmartCityExtensionTests(unittest.TestCase):
             "edges": [
                 {"id": "e0", "start": "n0", "end": "n0"},
                 {"id": "e1", "start": "n0", "end": "missing"},
+                {"id": "e2", "start": "n0", "end": "missing"},
             ],
             "faces": [],
         }
@@ -372,6 +379,7 @@ class SmartCityExtensionTests(unittest.TestCase):
         self.assertTrue(any("Duplicate node id" in error for error in validation["errors"]))
         self.assertTrue(any("Self-loop edge" in error for error in validation["errors"]))
         self.assertTrue(any("missing end node" in error for error in validation["errors"]))
+        self.assertTrue(any("Duplicate undirected edge" in error for error in validation["errors"]))
         self.assertTrue(validation["warnings"])
 
     def test_layout_draft_populates_and_exports_scene_collections(self):
@@ -382,6 +390,9 @@ class SmartCityExtensionTests(unittest.TestCase):
                 item = types.SimpleNamespace()
                 self.append(item)
                 return item
+
+            def remove(self, index):
+                del self[index]
 
         scene = types.SimpleNamespace(
             icity_layout_nodes=FakeCollection(),
@@ -407,6 +418,155 @@ class SmartCityExtensionTests(unittest.TestCase):
         self.assertEqual(scene.icity_layout_edges[0].start_node_id, "n0")
         self.assertEqual(exported["nodes"][1]["id"], "n1")
         self.assertEqual(exported["edges"][0]["end"], "n1")
+
+    def test_layout_draft_add_remove_helpers_manage_ids_and_connected_edges(self):
+        layout_control = load_module("layout_control_draft_helpers", "iCity/smart_city/layout_control.py")
+
+        class FakeCollection(list):
+            def add(self):
+                item = types.SimpleNamespace()
+                self.append(item)
+                return item
+
+            def remove(self, index):
+                del self[index]
+
+        scene = types.SimpleNamespace(
+            icity_layout_nodes=FakeCollection(),
+            icity_layout_edges=FakeCollection(),
+        )
+
+        first_node_index = layout_control.add_draft_node(scene)
+        second_node_index = layout_control.add_draft_node(scene)
+        edge_index = layout_control.add_draft_edge(scene)
+
+        self.assertEqual(first_node_index, 0)
+        self.assertEqual(second_node_index, 1)
+        self.assertEqual(edge_index, 0)
+        self.assertEqual([node.node_id for node in scene.icity_layout_nodes], ["n0", "n1"])
+        self.assertEqual(scene.icity_layout_edges[0].edge_id, "e0")
+        self.assertEqual(scene.icity_layout_edges[0].start_node_id, "n0")
+        self.assertEqual(scene.icity_layout_edges[0].end_node_id, "n1")
+
+        removed_node_id, affected_edges = layout_control.remove_draft_node(scene, 0)
+
+        self.assertEqual(removed_node_id, "n0")
+        self.assertEqual(affected_edges, 1)
+        self.assertEqual(len(scene.icity_layout_nodes), 1)
+        self.assertEqual(len(scene.icity_layout_edges), 0)
+
+    def test_layout_draft_remove_edge_and_unique_id_fill_gaps(self):
+        layout_control = load_module("layout_control_edge_helpers", "iCity/smart_city/layout_control.py")
+
+        class FakeCollection(list):
+            def add(self):
+                item = types.SimpleNamespace()
+                self.append(item)
+                return item
+
+            def remove(self, index):
+                del self[index]
+
+        scene = types.SimpleNamespace(
+            icity_layout_nodes=FakeCollection(
+                [
+                    types.SimpleNamespace(node_id="n0"),
+                    types.SimpleNamespace(node_id="n1"),
+                ]
+            ),
+            icity_layout_edges=FakeCollection(
+                [
+                    types.SimpleNamespace(edge_id="e1", start_node_id="n0", end_node_id="n1"),
+                ]
+            ),
+        )
+
+        edge_index = layout_control.add_draft_edge(scene)
+        removed_edge_id = layout_control.remove_draft_edge(scene, edge_index)
+
+        self.assertEqual(scene.icity_layout_edges[0].edge_id, "e1")
+        self.assertEqual(removed_edge_id, "e0")
+
+    def test_layout_normalization_merges_near_nodes_and_removes_duplicate_edges(self):
+        layout_control = load_module("layout_control_normalize_merge", "iCity/smart_city/layout_control.py")
+        graph = {
+            "nodes": [
+                {"id": "n0", "x": 0.0, "y": 0.0, "z": 0.0},
+                {"id": "n1", "x": 0.05, "y": 0.0, "z": 0.0},
+                {"id": "n2", "x": 10.0, "y": 0.0, "z": 0.0},
+            ],
+            "edges": [
+                {"id": "e0", "start": "n0", "end": "n2", "enabled_as_road": False},
+                {"id": "e1", "start": "n1", "end": "n2", "enabled_as_road": True},
+                {"id": "e2", "start": "n0", "end": "n1", "enabled_as_road": True},
+            ],
+            "faces": [],
+        }
+
+        normalized, stats = layout_control.normalize_layout_graph(graph, merge_distance=0.1)
+
+        self.assertEqual([node["id"] for node in normalized["nodes"]], ["n0", "n2"])
+        self.assertEqual(len(normalized["edges"]), 1)
+        self.assertEqual(normalized["edges"][0]["id"], "e0")
+        self.assertFalse(normalized["edges"][0]["enabled_as_road"])
+        self.assertEqual(stats["merged_nodes"], 1)
+        self.assertEqual(stats["removed_invalid_edges"], 1)
+        self.assertEqual(stats["removed_duplicate_edges"], 1)
+
+    def test_layout_normalization_splits_crossing_edges_at_shared_node(self):
+        layout_control = load_module("layout_control_normalize_crossing", "iCity/smart_city/layout_control.py")
+        graph = {
+            "nodes": [
+                {"id": "n0", "x": -10.0, "y": 0.0, "z": 0.0},
+                {"id": "n1", "x": 10.0, "y": 0.0, "z": 0.0},
+                {"id": "n2", "x": 0.0, "y": -10.0, "z": 0.0},
+                {"id": "n3", "x": 0.0, "y": 10.0, "z": 0.0},
+            ],
+            "edges": [
+                {"id": "e0", "start": "n0", "end": "n1", "enabled_as_road": True},
+                {"id": "e1", "start": "n2", "end": "n3", "enabled_as_road": True},
+            ],
+            "faces": [],
+        }
+
+        normalized, stats = layout_control.normalize_layout_graph(graph)
+
+        intersection_nodes = [
+            node for node in normalized["nodes"] if node["x"] == 0.0 and node["y"] == 0.0
+        ]
+        self.assertEqual(len(intersection_nodes), 1)
+        intersection_id = intersection_nodes[0]["id"]
+        self.assertEqual(len(normalized["edges"]), 4)
+        self.assertEqual(
+            sum(intersection_id in (edge["start"], edge["end"]) for edge in normalized["edges"]),
+            4,
+        )
+        self.assertEqual(stats["intersection_nodes"], 1)
+        self.assertEqual(stats["split_edges"], 2)
+
+    def test_layout_normalization_removes_missing_and_short_edges(self):
+        layout_control = load_module("layout_control_normalize_cleanup", "iCity/smart_city/layout_control.py")
+        graph = {
+            "nodes": [
+                {"id": "n0", "x": 0.0, "y": 0.0, "z": 0.0},
+                {"id": "n1", "x": 0.01, "y": 0.0, "z": 0.0},
+            ],
+            "edges": [
+                {"id": "e0", "start": "n0", "end": "missing", "enabled_as_road": True},
+                {"id": "e1", "start": "n0", "end": "n1", "enabled_as_road": True},
+            ],
+            "faces": [],
+        }
+
+        normalized, stats = layout_control.normalize_layout_graph(
+            graph,
+            merge_distance=0.0,
+            minimum_edge_length=0.1,
+        )
+
+        self.assertEqual(normalized["edges"], [])
+        self.assertEqual(stats["removed_invalid_edges"], 1)
+        self.assertEqual(stats["removed_short_edges"], 1)
 
     def test_vehicle_motion_points_from_open_chain_ping_pong_without_shortcut(self):
         traffic_extension = load_module("traffic_extension_pingpong", "iCity/smart_city/traffic_extension.py")

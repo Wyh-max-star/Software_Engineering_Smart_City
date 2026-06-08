@@ -8,6 +8,7 @@ same standalone module.
 from __future__ import annotations
 
 import json
+import math
 from collections.abc import Iterable
 
 import bpy
@@ -273,6 +274,7 @@ def validate_layout_graph(graph: dict) -> dict:
         node_id_set.add(node_id)
 
     edge_ids = set()
+    undirected_edges = set()
     for edge in graph.get("edges", []):
         edge_id = edge.get("id", "")
         if not edge_id:
@@ -289,11 +291,236 @@ def validate_layout_graph(graph: dict) -> dict:
             errors.append(f"Edge {edge_id or '<unnamed>'} references missing start node: {start}")
         if end not in node_id_set:
             errors.append(f"Edge {edge_id or '<unnamed>'} references missing end node: {end}")
+        edge_key = tuple(sorted((start, end)))
+        if start and end and start != end:
+            if edge_key in undirected_edges:
+                errors.append(f"Duplicate undirected edge: {start} <-> {end}")
+            undirected_edges.add(edge_key)
 
     if not graph.get("faces"):
         warnings.append("No face loops exported; buildings may not have city blocks.")
 
     return {"errors": errors, "warnings": warnings}
+
+
+def _node_distance(first: dict, second: dict) -> float:
+    """Return the 3D distance between two plain layout-graph nodes."""
+
+    return math.sqrt(
+        (float(first.get("x", 0.0)) - float(second.get("x", 0.0))) ** 2
+        + (float(first.get("y", 0.0)) - float(second.get("y", 0.0))) ** 2
+        + (float(first.get("z", 0.0)) - float(second.get("z", 0.0))) ** 2
+    )
+
+
+def _segment_intersection_2d(start_a: dict, end_a: dict, start_b: dict, end_b: dict, tolerance: float):
+    """Return parameters and coordinates for one proper XY intersection.
+
+    Endpoint intersections are already represented by graph nodes and are
+    deliberately ignored here. Collinear overlaps are also left unchanged:
+    deciding how overlapping roads should combine is a separate user-facing
+    policy, not a safe automatic cleanup.
+    """
+
+    ax = float(end_a.get("x", 0.0)) - float(start_a.get("x", 0.0))
+    ay = float(end_a.get("y", 0.0)) - float(start_a.get("y", 0.0))
+    bx = float(end_b.get("x", 0.0)) - float(start_b.get("x", 0.0))
+    by = float(end_b.get("y", 0.0)) - float(start_b.get("y", 0.0))
+    denominator = ax * by - ay * bx
+    if abs(denominator) <= tolerance:
+        return None
+
+    offset_x = float(start_b.get("x", 0.0)) - float(start_a.get("x", 0.0))
+    offset_y = float(start_b.get("y", 0.0)) - float(start_a.get("y", 0.0))
+    parameter_a = (offset_x * by - offset_y * bx) / denominator
+    parameter_b = (offset_x * ay - offset_y * ax) / denominator
+    if not (tolerance < parameter_a < 1.0 - tolerance):
+        return None
+    if not (tolerance < parameter_b < 1.0 - tolerance):
+        return None
+
+    x = float(start_a.get("x", 0.0)) + parameter_a * ax
+    y = float(start_a.get("y", 0.0)) + parameter_a * ay
+    z_a = float(start_a.get("z", 0.0)) + parameter_a * (
+        float(end_a.get("z", 0.0)) - float(start_a.get("z", 0.0))
+    )
+    z_b = float(start_b.get("z", 0.0)) + parameter_b * (
+        float(end_b.get("z", 0.0)) - float(start_b.get("z", 0.0))
+    )
+    return parameter_a, parameter_b, x, y, (z_a + z_b) / 2.0
+
+
+def normalize_layout_graph(
+    graph: dict,
+    *,
+    merge_distance: float = 0.1,
+    intersection_tolerance: float = 0.001,
+    minimum_edge_length: float = 0.001,
+) -> tuple[dict, dict]:
+    """Normalize an editable road graph without touching ``ICity Base``.
+
+    The operation is deterministic and conservative:
+    - nearby nodes merge into the first matching node;
+    - proper interior XY crossings become shared nodes;
+    - missing, self-loop, duplicate, and too-short edges are removed;
+    - the first surviving edge keeps its original road attributes.
+    """
+
+    merge_distance = max(float(merge_distance), 0.0)
+    intersection_tolerance = max(float(intersection_tolerance), 1e-9)
+    minimum_edge_length = max(float(minimum_edge_length), 0.0)
+    stats = {
+        "merged_nodes": 0,
+        "intersection_nodes": 0,
+        "removed_invalid_edges": 0,
+        "removed_short_edges": 0,
+        "removed_duplicate_edges": 0,
+        "split_edges": 0,
+    }
+
+    nodes = []
+    node_aliases = {}
+    for source_node in graph.get("nodes", []):
+        node = {
+            "id": str(source_node.get("id", "")),
+            "source_index": int(source_node.get("source_index", -1)),
+            "x": float(source_node.get("x", 0.0)),
+            "y": float(source_node.get("y", 0.0)),
+            "z": float(source_node.get("z", 0.0)),
+        }
+        if not node["id"] or node["id"] in node_aliases:
+            continue
+        target = next(
+            (candidate for candidate in nodes if _node_distance(node, candidate) <= merge_distance),
+            None,
+        )
+        if target is None:
+            nodes.append(node)
+            node_aliases[node["id"]] = node["id"]
+        else:
+            node_aliases[node["id"]] = target["id"]
+            stats["merged_nodes"] += 1
+
+    node_by_id = {node["id"]: node for node in nodes}
+    edges = []
+    seen_edge_keys = set()
+    for source_edge in graph.get("edges", []):
+        start = node_aliases.get(source_edge.get("start"))
+        end = node_aliases.get(source_edge.get("end"))
+        if not start or not end or start == end:
+            stats["removed_invalid_edges"] += 1
+            continue
+        if _node_distance(node_by_id[start], node_by_id[end]) < minimum_edge_length:
+            stats["removed_short_edges"] += 1
+            continue
+        key = tuple(sorted((start, end)))
+        if key in seen_edge_keys:
+            stats["removed_duplicate_edges"] += 1
+            continue
+        seen_edge_keys.add(key)
+        edges.append(
+            {
+                "id": str(source_edge.get("id", "")),
+                "source_index": int(source_edge.get("source_index", -1)),
+                "start": start,
+                "end": end,
+                "enabled_as_road": bool(source_edge.get("enabled_as_road", True)),
+            }
+        )
+
+    # Collect all split points before rebuilding edges. This prevents a newly
+    # split edge from changing the pair iteration while intersections are read.
+    split_points = {index: [] for index in range(len(edges))}
+    existing_node_ids = {node["id"] for node in nodes}
+    for first_index, first_edge in enumerate(edges):
+        for second_index in range(first_index + 1, len(edges)):
+            second_edge = edges[second_index]
+            if {first_edge["start"], first_edge["end"]} & {second_edge["start"], second_edge["end"]}:
+                continue
+            intersection = _segment_intersection_2d(
+                node_by_id[first_edge["start"]],
+                node_by_id[first_edge["end"]],
+                node_by_id[second_edge["start"]],
+                node_by_id[second_edge["end"]],
+                intersection_tolerance,
+            )
+            if intersection is None:
+                continue
+            parameter_a, parameter_b, x, y, z = intersection
+            intersection_node = next(
+                (
+                    node
+                    for node in nodes
+                    if _node_distance(node, {"x": x, "y": y, "z": z}) <= intersection_tolerance
+                ),
+                None,
+            )
+            if intersection_node is None:
+                node_id = next_unique_id(existing_node_ids, "n")
+                existing_node_ids.add(node_id)
+                intersection_node = {
+                    "id": node_id,
+                    "source_index": -1,
+                    "x": x,
+                    "y": y,
+                    "z": z,
+                }
+                nodes.append(intersection_node)
+                node_by_id[node_id] = intersection_node
+                stats["intersection_nodes"] += 1
+            split_points[first_index].append((parameter_a, intersection_node["id"]))
+            split_points[second_index].append((parameter_b, intersection_node["id"]))
+
+    normalized_edges = []
+    existing_edge_ids = {edge["id"] for edge in edges if edge["id"]}
+    for edge_index, edge in enumerate(edges):
+        points = [(0.0, edge["start"]), *split_points[edge_index], (1.0, edge["end"])]
+        points.sort(key=lambda item: item[0])
+        if split_points[edge_index]:
+            stats["split_edges"] += 1
+        for segment_index, ((_, start), (_, end)) in enumerate(zip(points, points[1:])):
+            if start == end:
+                continue
+            segment = dict(edge)
+            segment["start"] = start
+            segment["end"] = end
+            if segment_index > 0 or not segment["id"]:
+                segment["id"] = next_unique_id(existing_edge_ids, "e")
+            existing_edge_ids.add(segment["id"])
+            normalized_edges.append(segment)
+
+    # Crossing splits can reveal duplicates that did not exist before. Keep
+    # the first segment and leave its road-enabled state unchanged.
+    deduplicated_edges = []
+    seen_edge_keys.clear()
+    for edge in normalized_edges:
+        key = tuple(sorted((edge["start"], edge["end"])))
+        if key in seen_edge_keys:
+            stats["removed_duplicate_edges"] += 1
+            continue
+        seen_edge_keys.add(key)
+        deduplicated_edges.append(edge)
+
+    normalized_graph = {
+        "version": graph.get("version", 1),
+        "source": f"{graph.get('source', ICITY_BASE_OBJECT)} Normalized",
+        "nodes": nodes,
+        "edges": deduplicated_edges,
+        # Existing face loops cannot safely survive arbitrary node merges and
+        # edge splits. Face reconstruction belongs to the later apply stage.
+        "faces": [],
+    }
+    return normalized_graph, stats
+
+
+def format_normalization_summary(stats: dict) -> str:
+    """Create a compact user-facing summary of a normalization pass."""
+
+    return (
+        f"Merged {stats['merged_nodes']} nodes; added {stats['intersection_nodes']} intersections; "
+        f"split {stats['split_edges']} edges; removed "
+        f"{stats['removed_invalid_edges'] + stats['removed_short_edges'] + stats['removed_duplicate_edges']} edges"
+    )
 
 
 def _set_collection_item_values(item, values: dict) -> None:
@@ -372,6 +599,103 @@ def build_layout_graph_from_draft(scene) -> dict:
         "edges": edges,
         "faces": [],
     }
+
+
+def next_unique_id(existing_ids, prefix: str) -> str:
+    """Return the first unused deterministic ID for a new draft item."""
+
+    existing = set(existing_ids)
+    index = 0
+    while f"{prefix}{index}" in existing:
+        index += 1
+    return f"{prefix}{index}"
+
+
+def add_draft_node(scene) -> int:
+    """Append a new node draft row and return its collection index."""
+
+    node_id = next_unique_id((node.node_id for node in scene.icity_layout_nodes), "n")
+    item = scene.icity_layout_nodes.add()
+    _set_collection_item_values(
+        item,
+        {
+            "node_id": node_id,
+            "source_index": -1,
+            "x": 0.0,
+            "y": 0.0,
+            "z": 0.0,
+        },
+    )
+    return len(scene.icity_layout_nodes) - 1
+
+
+def remove_draft_node(scene, node_index: int) -> tuple[str, int]:
+    """Remove one node and every edge that references it.
+
+    Returning the removed node ID and affected-edge count gives the Blender
+    operator enough information to report the destructive draft-only change.
+    """
+
+    if node_index < 0 or node_index >= len(scene.icity_layout_nodes):
+        raise IndexError("No valid draft node is selected.")
+
+    node_id = scene.icity_layout_nodes[node_index].node_id
+    affected_edge_indexes = [
+        index
+        for index, edge in enumerate(scene.icity_layout_edges)
+        if edge.start_node_id == node_id or edge.end_node_id == node_id
+    ]
+    # Blender collection indexes shift after removal, so delete backwards.
+    for edge_index in reversed(affected_edge_indexes):
+        scene.icity_layout_edges.remove(edge_index)
+    scene.icity_layout_nodes.remove(node_index)
+    return node_id, len(affected_edge_indexes)
+
+
+def add_draft_edge(scene) -> int:
+    """Append a road edge using the first two available draft nodes."""
+
+    if len(scene.icity_layout_nodes) < 2:
+        raise ValueError("At least two draft nodes are required before adding an edge.")
+
+    edge_id = next_unique_id((edge.edge_id for edge in scene.icity_layout_edges), "e")
+    item = scene.icity_layout_edges.add()
+    _set_collection_item_values(
+        item,
+        {
+            "edge_id": edge_id,
+            "source_index": -1,
+            "start_node_id": scene.icity_layout_nodes[0].node_id,
+            "end_node_id": scene.icity_layout_nodes[1].node_id,
+            "enabled_as_road": True,
+        },
+    )
+    return len(scene.icity_layout_edges) - 1
+
+
+def remove_draft_edge(scene, edge_index: int) -> str:
+    """Remove one selected edge draft row and return its ID."""
+
+    if edge_index < 0 or edge_index >= len(scene.icity_layout_edges):
+        raise IndexError("No valid draft edge is selected.")
+    edge_id = scene.icity_layout_edges[edge_index].edge_id
+    scene.icity_layout_edges.remove(edge_index)
+    return edge_id
+
+
+def format_validation_summary(validation: dict) -> str:
+    """Create a short status line suitable for Blender's narrow sidebar."""
+
+    return f"{len(validation['errors'])} errors, {len(validation['warnings'])} warnings"
+
+
+def write_validation_details(scene, validation: dict) -> None:
+    """Store the first validation messages for direct sidebar display."""
+
+    messages = []
+    messages.extend(f"ERROR: {message}" for message in validation["errors"])
+    messages.extend(f"WARNING: {message}" for message in validation["warnings"])
+    scene.icity_layout_validation_details = "\n".join(messages[:8])
 
 
 def group_attributes_by_domain(report: dict) -> dict[str, list[dict]]:
@@ -542,6 +866,7 @@ class ICITY_OT_LoadLayoutDraftFromBase(Operator):
             graph = build_layout_graph_export(_last_contract_report)
             populate_layout_draft(context.scene, graph)
             validation = validate_layout_graph(graph)
+            write_validation_details(context.scene, validation)
         except Exception as exc:  # pragma: no cover - surfaced in Blender UI
             self.report({"ERROR"}, f"Load layout draft failed: {exc}")
             return {"CANCELLED"}
@@ -579,6 +904,142 @@ class ICITY_OT_ExportLayoutDraft(Operator):
             self.report({"WARNING"}, "Draft exported with validation errors. Check node and edge IDs.")
         else:
             self.report({"INFO"}, f"Draft written to Text Editor: {LAYOUT_GRAPH_TEXT}")
+        return {"FINISHED"}
+
+
+class ICITY_OT_AddLayoutDraftNode(Operator):
+    bl_idname = "icity.add_layout_draft_node"
+    bl_label = "Add Node"
+    bl_description = "Add a new node to the editable draft only"
+    bl_options = {"REGISTER", "UNDO"}
+
+    def execute(self, context):
+        context.scene.icity_layout_node_index = add_draft_node(context.scene)
+        self.report({"INFO"}, "Draft node added.")
+        return {"FINISHED"}
+
+
+class ICITY_OT_RemoveLayoutDraftNode(Operator):
+    bl_idname = "icity.remove_layout_draft_node"
+    bl_label = "Remove Node"
+    bl_description = "Remove the selected draft node and its connected draft edges"
+    bl_options = {"REGISTER", "UNDO"}
+
+    def execute(self, context):
+        try:
+            node_id, affected_edges = remove_draft_node(
+                context.scene,
+                context.scene.icity_layout_node_index,
+            )
+        except Exception as exc:
+            self.report({"ERROR"}, str(exc))
+            return {"CANCELLED"}
+
+        context.scene.icity_layout_node_index = min(
+            context.scene.icity_layout_node_index,
+            max(len(context.scene.icity_layout_nodes) - 1, 0),
+        )
+        context.scene.icity_layout_edge_index = min(
+            context.scene.icity_layout_edge_index,
+            max(len(context.scene.icity_layout_edges) - 1, 0),
+        )
+        self.report({"INFO"}, f"Removed {node_id} and {affected_edges} connected edge(s).")
+        return {"FINISHED"}
+
+
+class ICITY_OT_AddLayoutDraftEdge(Operator):
+    bl_idname = "icity.add_layout_draft_edge"
+    bl_label = "Add Edge"
+    bl_description = "Add a new edge to the editable draft only"
+    bl_options = {"REGISTER", "UNDO"}
+
+    def execute(self, context):
+        try:
+            context.scene.icity_layout_edge_index = add_draft_edge(context.scene)
+        except Exception as exc:
+            self.report({"ERROR"}, str(exc))
+            return {"CANCELLED"}
+        self.report({"INFO"}, "Draft edge added.")
+        return {"FINISHED"}
+
+
+class ICITY_OT_RemoveLayoutDraftEdge(Operator):
+    bl_idname = "icity.remove_layout_draft_edge"
+    bl_label = "Remove Edge"
+    bl_description = "Remove the selected edge from the editable draft only"
+    bl_options = {"REGISTER", "UNDO"}
+
+    def execute(self, context):
+        try:
+            edge_id = remove_draft_edge(context.scene, context.scene.icity_layout_edge_index)
+        except Exception as exc:
+            self.report({"ERROR"}, str(exc))
+            return {"CANCELLED"}
+        context.scene.icity_layout_edge_index = min(
+            context.scene.icity_layout_edge_index,
+            max(len(context.scene.icity_layout_edges) - 1, 0),
+        )
+        self.report({"INFO"}, f"Removed draft edge {edge_id}.")
+        return {"FINISHED"}
+
+
+class ICITY_OT_ValidateLayoutDraft(Operator):
+    bl_idname = "icity.validate_layout_draft"
+    bl_label = "Validate Draft"
+    bl_description = "Validate draft IDs and edge endpoint references without modifying the city"
+    bl_options = {"REGISTER"}
+
+    def execute(self, context):
+        graph = build_layout_graph_from_draft(context.scene)
+        validation = validate_layout_graph(graph)
+        write_validation_details(context.scene, validation)
+        context.scene.icity_layout_draft_summary = f"Draft validation: {format_validation_summary(validation)}"
+        if validation["errors"]:
+            self.report({"WARNING"}, "Draft contains validation errors.")
+        else:
+            self.report({"INFO"}, "Draft validation completed.")
+        return {"FINISHED"}
+
+
+class ICITY_OT_NormalizeLayoutDraft(Operator):
+    bl_idname = "icity.normalize_layout_draft"
+    bl_label = "Normalize Draft"
+    bl_description = "Merge nearby nodes, split crossing edges, and remove duplicate draft edges without modifying ICity Base"
+    bl_options = {"REGISTER", "UNDO"}
+
+    def execute(self, context):
+        try:
+            graph = build_layout_graph_from_draft(context.scene)
+            normalized_graph, stats = normalize_layout_graph(
+                graph,
+                merge_distance=context.scene.icity_layout_merge_distance,
+                intersection_tolerance=context.scene.icity_layout_intersection_tolerance,
+                minimum_edge_length=context.scene.icity_layout_minimum_edge_length,
+            )
+            populate_layout_draft(context.scene, normalized_graph)
+            validation = validate_layout_graph(normalized_graph)
+            write_validation_details(context.scene, validation)
+            write_layout_graph_text(normalized_graph)
+        except Exception as exc:  # pragma: no cover - surfaced in Blender UI
+            self.report({"ERROR"}, f"Normalize layout draft failed: {exc}")
+            return {"CANCELLED"}
+
+        context.scene.icity_layout_node_index = min(
+            context.scene.icity_layout_node_index,
+            max(len(context.scene.icity_layout_nodes) - 1, 0),
+        )
+        context.scene.icity_layout_edge_index = min(
+            context.scene.icity_layout_edge_index,
+            max(len(context.scene.icity_layout_edges) - 1, 0),
+        )
+        context.scene.icity_layout_draft_summary = (
+            f"Draft normalized: {len(normalized_graph['nodes'])} nodes, "
+            f"{len(normalized_graph['edges'])} edges. {format_normalization_summary(stats)}"
+        )
+        if validation["errors"]:
+            self.report({"WARNING"}, "Draft normalized but still has validation errors.")
+        else:
+            self.report({"INFO"}, "Draft normalized and exported.")
         return {"FINISHED"}
 
 
@@ -677,8 +1138,21 @@ class ICITY_PT_LayoutControlPanel(Panel):
         row = draft_box.row(align=True)
         row.operator("icity.load_layout_draft_from_base", icon="IMPORT")
         row.operator("icity.export_layout_draft", icon="EXPORT")
+        draft_box.operator("icity.validate_layout_draft", icon="CHECKMARK")
         if context.scene.icity_layout_draft_summary:
             draft_box.label(text=context.scene.icity_layout_draft_summary)
+        if context.scene.icity_layout_validation_details:
+            validation_box = draft_box.box()
+            validation_box.label(text="Validation Details", icon="INFO")
+            for line in context.scene.icity_layout_validation_details.splitlines():
+                validation_box.label(text=line, icon="ERROR" if line.startswith("ERROR:") else "INFO")
+
+        normalize_box = draft_box.box()
+        normalize_box.label(text="Phase 3 Topology Normalize (Draft Only)", icon="MODIFIER")
+        normalize_box.prop(context.scene, "icity_layout_merge_distance")
+        normalize_box.prop(context.scene, "icity_layout_intersection_tolerance")
+        normalize_box.prop(context.scene, "icity_layout_minimum_edge_length")
+        normalize_box.operator("icity.normalize_layout_draft", icon="AUTOMERGE_ON")
 
         node_list_box = draft_box.box()
         node_list_box.label(text="Editable Nodes", icon="VERTEXSEL")
@@ -691,6 +1165,9 @@ class ICITY_PT_LayoutControlPanel(Panel):
             "icity_layout_node_index",
             rows=4,
         )
+        node_actions = node_list_box.row(align=True)
+        node_actions.operator("icity.add_layout_draft_node", icon="ADD")
+        node_actions.operator("icity.remove_layout_draft_node", icon="REMOVE")
         if 0 <= context.scene.icity_layout_node_index < len(context.scene.icity_layout_nodes):
             node = context.scene.icity_layout_nodes[context.scene.icity_layout_node_index]
             node_list_box.prop(node, "node_id")
@@ -710,6 +1187,9 @@ class ICITY_PT_LayoutControlPanel(Panel):
             "icity_layout_edge_index",
             rows=4,
         )
+        edge_actions = edge_list_box.row(align=True)
+        edge_actions.operator("icity.add_layout_draft_edge", icon="ADD")
+        edge_actions.operator("icity.remove_layout_draft_edge", icon="REMOVE")
         if 0 <= context.scene.icity_layout_edge_index < len(context.scene.icity_layout_edges):
             edge = context.scene.icity_layout_edges[context.scene.icity_layout_edge_index]
             edge_list_box.prop(edge, "edge_id")
@@ -728,6 +1208,12 @@ CLASSES = (
     ICITY_OT_ExportLayoutGraph,
     ICITY_OT_LoadLayoutDraftFromBase,
     ICITY_OT_ExportLayoutDraft,
+    ICITY_OT_AddLayoutDraftNode,
+    ICITY_OT_RemoveLayoutDraftNode,
+    ICITY_OT_AddLayoutDraftEdge,
+    ICITY_OT_RemoveLayoutDraftEdge,
+    ICITY_OT_ValidateLayoutDraft,
+    ICITY_OT_NormalizeLayoutDraft,
     ICITY_PT_LayoutControlPanel,
 )
 
@@ -745,18 +1231,45 @@ def register() -> None:
         default="",
         options={"HIDDEN"},
     )
+    bpy.types.Scene.icity_layout_validation_details = bpy.props.StringProperty(
+        name="Layout Validation Details",
+        default="",
+        options={"HIDDEN"},
+    )
     bpy.types.Scene.icity_layout_nodes = CollectionProperty(type=ICITY_LayoutNodeDraft)
     bpy.types.Scene.icity_layout_edges = CollectionProperty(type=ICITY_LayoutEdgeDraft)
     bpy.types.Scene.icity_layout_node_index = IntProperty(name="Node Index", default=0)
     bpy.types.Scene.icity_layout_edge_index = IntProperty(name="Edge Index", default=0)
+    bpy.types.Scene.icity_layout_merge_distance = FloatProperty(
+        name="Merge Distance",
+        description="Draft nodes within this distance are merged into the first matching node",
+        default=0.1,
+        min=0.0,
+    )
+    bpy.types.Scene.icity_layout_intersection_tolerance = FloatProperty(
+        name="Intersection Tolerance",
+        description="Numerical tolerance for detecting proper XY edge crossings",
+        default=0.001,
+        min=0.000001,
+    )
+    bpy.types.Scene.icity_layout_minimum_edge_length = FloatProperty(
+        name="Minimum Edge Length",
+        description="Draft edges shorter than this value are removed during normalization",
+        default=0.001,
+        min=0.0,
+    )
 
 
 def unregister() -> None:
     for property_name in (
         "icity_layout_edge_index",
         "icity_layout_node_index",
+        "icity_layout_minimum_edge_length",
+        "icity_layout_intersection_tolerance",
+        "icity_layout_merge_distance",
         "icity_layout_edges",
         "icity_layout_nodes",
+        "icity_layout_validation_details",
         "icity_layout_draft_summary",
         "icity_layout_contract_summary",
     ):
