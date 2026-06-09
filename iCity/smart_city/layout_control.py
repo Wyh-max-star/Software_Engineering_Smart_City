@@ -19,6 +19,11 @@ from bpy.types import Operator, Panel, PropertyGroup, UIList
 ICITY_BASE_OBJECT = "ICity Base"
 LAYOUT_CONTRACT_TEXT = "ICity Layout Contract Report"
 LAYOUT_GRAPH_TEXT = "ICity Layout Graph Export"
+LAYOUT_PREVIEW_COLLECTION = "ICity Layout Draft Preview"
+LAYOUT_PREVIEW_NODES = "ICity Layout Preview Nodes"
+LAYOUT_PREVIEW_ROADS = "ICity Layout Preview Roads"
+LAYOUT_PREVIEW_DISABLED_ROADS = "ICity Layout Preview Disabled Roads"
+LAYOUT_PREVIEW_BLOCKS = "ICity Layout Preview Blocks"
 
 # The complete contract report can be large and is only needed while Blender
 # is running. Keeping the last read-only report in module memory avoids
@@ -506,10 +511,16 @@ def normalize_layout_graph(
         "source": f"{graph.get('source', ICITY_BASE_OBJECT)} Normalized",
         "nodes": nodes,
         "edges": deduplicated_edges,
-        # Existing face loops cannot safely survive arbitrary node merges and
-        # edge splits. Face reconstruction belongs to the later apply stage.
         "faces": [],
     }
+    normalized_graph["faces"] = [
+        {
+            "id": f"f{index}",
+            "source_index": -1,
+            "vertices": loop,
+        }
+        for index, loop in enumerate(infer_face_loops_from_graph(normalized_graph))
+    ]
     return normalized_graph, stats
 
 
@@ -521,6 +532,211 @@ def format_normalization_summary(stats: dict) -> str:
         f"split {stats['split_edges']} edges; removed "
         f"{stats['removed_invalid_edges'] + stats['removed_short_edges'] + stats['removed_duplicate_edges']} edges"
     )
+
+
+def build_layout_preview_geometry(
+    graph: dict,
+    *,
+    road_width: float = 2.5,
+    node_radius: float = 1.2,
+    preview_height: float = 0.4,
+) -> dict:
+    """Convert a LayoutGraph into simple visible preview mesh geometry.
+
+    Preview geometry is deliberately independent from ICity's live mesh and
+    Geometry Nodes. Roads are flat quads, nodes are small octahedrons, and
+    detected blocks are polygon faces slightly below the road ribbons.
+    """
+
+    road_width = max(float(road_width), 0.01)
+    node_radius = max(float(node_radius), 0.01)
+    preview_height = float(preview_height)
+    node_by_id = {node.get("id"): node for node in graph.get("nodes", []) if node.get("id")}
+
+    node_vertices = []
+    node_faces = []
+    for node in graph.get("nodes", []):
+        x = float(node.get("x", 0.0))
+        y = float(node.get("y", 0.0))
+        z = float(node.get("z", 0.0)) + preview_height
+        start_index = len(node_vertices)
+        node_vertices.extend(
+            [
+                (x + node_radius, y, z),
+                (x, y + node_radius, z),
+                (x - node_radius, y, z),
+                (x, y - node_radius, z),
+                (x, y, z + node_radius),
+                (x, y, z - node_radius),
+            ]
+        )
+        node_faces.extend(
+            [
+                (start_index + 0, start_index + 1, start_index + 4),
+                (start_index + 1, start_index + 2, start_index + 4),
+                (start_index + 2, start_index + 3, start_index + 4),
+                (start_index + 3, start_index + 0, start_index + 4),
+                (start_index + 1, start_index + 0, start_index + 5),
+                (start_index + 2, start_index + 1, start_index + 5),
+                (start_index + 3, start_index + 2, start_index + 5),
+                (start_index + 0, start_index + 3, start_index + 5),
+            ]
+        )
+
+    road_geometry = {
+        True: {"vertices": [], "faces": []},
+        False: {"vertices": [], "faces": []},
+    }
+    for edge in graph.get("edges", []):
+        start = node_by_id.get(edge.get("start"))
+        end = node_by_id.get(edge.get("end"))
+        if start is None or end is None:
+            continue
+        start_x = float(start.get("x", 0.0))
+        start_y = float(start.get("y", 0.0))
+        end_x = float(end.get("x", 0.0))
+        end_y = float(end.get("y", 0.0))
+        delta_x = end_x - start_x
+        delta_y = end_y - start_y
+        length = math.hypot(delta_x, delta_y)
+        if length <= 1e-9:
+            continue
+        half_width = road_width / 2.0
+        offset_x = -delta_y / length * half_width
+        offset_y = delta_x / length * half_width
+        start_z = float(start.get("z", 0.0)) + preview_height
+        end_z = float(end.get("z", 0.0)) + preview_height
+        enabled = bool(edge.get("enabled_as_road", True))
+        target = road_geometry[enabled]
+        first_index = len(target["vertices"])
+        target["vertices"].extend(
+            [
+                (start_x + offset_x, start_y + offset_y, start_z),
+                (start_x - offset_x, start_y - offset_y, start_z),
+                (end_x - offset_x, end_y - offset_y, end_z),
+                (end_x + offset_x, end_y + offset_y, end_z),
+            ]
+        )
+        target["faces"].append(
+            (first_index, first_index + 1, first_index + 2, first_index + 3)
+        )
+
+    block_vertices = []
+    block_faces = []
+    for loop in infer_face_loops_from_graph(graph):
+        face = []
+        for node_id in loop:
+            node = node_by_id.get(node_id)
+            if node is None:
+                continue
+            face.append(len(block_vertices))
+            block_vertices.append(
+                (
+                    float(node.get("x", 0.0)),
+                    float(node.get("y", 0.0)),
+                    float(node.get("z", 0.0)) + preview_height - 0.08,
+                )
+            )
+        if len(face) >= 3:
+            block_faces.append(tuple(face))
+
+    return {
+        "nodes": {"vertices": node_vertices, "faces": node_faces},
+        "roads": road_geometry[True],
+        "disabled_roads": road_geometry[False],
+        "blocks": {"vertices": block_vertices, "faces": block_faces},
+    }
+
+
+def _polygon_area_xy(nodes: list[dict]) -> float:
+    """Return signed polygon area in the graph's local XY plane."""
+
+    area = 0.0
+    for index, node in enumerate(nodes):
+        next_node = nodes[(index + 1) % len(nodes)]
+        area += float(node.get("x", 0.0)) * float(next_node.get("y", 0.0))
+        area -= float(next_node.get("x", 0.0)) * float(node.get("y", 0.0))
+    return area / 2.0
+
+
+def _canonical_cycle(cycle: list[str]) -> tuple[str, ...]:
+    """Normalize a cycle ID sequence so duplicates compare equal."""
+
+    rotations = []
+    for values in (cycle, list(reversed(cycle))):
+        for index in range(len(values)):
+            rotations.append(tuple(values[index:] + values[:index]))
+    return min(rotations)
+
+
+def infer_face_loops_from_graph(graph: dict, *, max_cycle_length: int = 12) -> list[list[str]]:
+    """Infer simple closed blocks from the current road graph.
+
+    This is intentionally conservative. It returns explicit graph faces if
+    present; otherwise it finds small chordless cycles. Chordless cycles avoid
+    exporting a large outer rectangle when a diagonal road splits it into two
+    smaller city blocks.
+    """
+
+    explicit_faces = []
+    node_ids = {node.get("id") for node in graph.get("nodes", [])}
+    for face in graph.get("faces", []):
+        vertices = [node_id for node_id in face.get("vertices", []) if node_id in node_ids]
+        if len(vertices) >= 3:
+            explicit_faces.append(vertices)
+    if explicit_faces:
+        return explicit_faces
+
+    adjacency: dict[str, set[str]] = {node_id: set() for node_id in node_ids if node_id}
+    edge_keys = set()
+    for edge in graph.get("edges", []):
+        if not edge.get("enabled_as_road", True):
+            continue
+        start = edge.get("start")
+        end = edge.get("end")
+        if start in adjacency and end in adjacency and start != end:
+            adjacency[start].add(end)
+            adjacency[end].add(start)
+            edge_keys.add(tuple(sorted((start, end))))
+
+    cycles = {}
+
+    def visit(start: str, current: str, path: list[str]) -> None:
+        if len(path) > max_cycle_length:
+            return
+        for neighbor in adjacency[current]:
+            if neighbor == start and len(path) >= 3:
+                key = _canonical_cycle(path)
+                cycles[key] = list(key)
+            elif neighbor not in path:
+                visit(start, neighbor, path + [neighbor])
+
+    for node_id in sorted(adjacency):
+        visit(node_id, node_id, [node_id])
+
+    node_by_id = {node["id"]: node for node in graph.get("nodes", [])}
+    inferred = []
+    for cycle in cycles.values():
+        cycle_nodes = [node_by_id[node_id] for node_id in cycle]
+        if abs(_polygon_area_xy(cycle_nodes)) < 1e-6:
+            continue
+        chord_found = False
+        for first_index, first_node_id in enumerate(cycle):
+            for second_index in range(first_index + 1, len(cycle)):
+                if second_index == first_index + 1:
+                    continue
+                if first_index == 0 and second_index == len(cycle) - 1:
+                    continue
+                if tuple(sorted((first_node_id, cycle[second_index]))) in edge_keys:
+                    chord_found = True
+                    break
+            if chord_found:
+                break
+        if not chord_found:
+            inferred.append(cycle)
+
+    inferred.sort(key=lambda cycle: abs(_polygon_area_xy([node_by_id[node_id] for node_id in cycle])))
+    return inferred
 
 
 def _set_collection_item_values(item, values: dict) -> None:
@@ -592,13 +808,25 @@ def build_layout_graph_from_draft(scene) -> dict:
         }
         for edge in scene.icity_layout_edges
     ]
-    return {
+    graph = {
         "version": 1,
         "source": f"{ICITY_BASE_OBJECT} Draft",
         "nodes": nodes,
         "edges": edges,
         "faces": [],
     }
+    # The UI draft does not expose a separate face editor yet. Derive obvious
+    # closed city blocks during export so the JSON preview matches what Apply
+    # can write back to the mesh.
+    graph["faces"] = [
+        {
+            "id": f"f{index}",
+            "source_index": -1,
+            "vertices": loop,
+        }
+        for index, loop in enumerate(infer_face_loops_from_graph(graph))
+    ]
+    return graph
 
 
 def next_unique_id(existing_ids, prefix: str) -> str:
@@ -753,6 +981,98 @@ def write_layout_graph_text(graph: dict):
     text.clear()
     text.write(format_layout_graph_export(graph))
     return text
+
+
+def clear_layout_preview() -> int:
+    """Remove only the independent layout-draft preview collection."""
+
+    collection = bpy.data.collections.get(LAYOUT_PREVIEW_COLLECTION)
+    if collection is None:
+        return 0
+    objects = list(getattr(collection, "objects", []))
+    for obj in objects:
+        mesh = getattr(obj, "data", None)
+        bpy.data.objects.remove(obj, do_unlink=True)
+        if mesh is not None and getattr(mesh, "users", 1) == 0:
+            bpy.data.meshes.remove(mesh)
+    bpy.data.collections.remove(collection)
+    return len(objects)
+
+
+def _ensure_preview_material(name: str, color: tuple[float, float, float, float]):
+    """Create or update one simple material used only by draft previews."""
+
+    material = bpy.data.materials.get(name)
+    if material is None:
+        material = bpy.data.materials.new(name)
+    material.diffuse_color = color
+    return material
+
+
+def _create_preview_mesh_object(collection, name: str, geometry: dict, material, matrix_world):
+    """Create one independent preview mesh object from plain geometry."""
+
+    if not geometry["vertices"] or not geometry["faces"]:
+        return None
+    mesh = bpy.data.meshes.new(f"{name} Mesh")
+    mesh.from_pydata(geometry["vertices"], [], geometry["faces"])
+    mesh.update()
+    obj = bpy.data.objects.new(name, mesh)
+    collection.objects.link(obj)
+    if matrix_world is not None:
+        obj.matrix_world = matrix_world.copy()
+    obj.show_in_front = True
+    obj.color = material.diffuse_color
+    mesh.materials.append(material)
+    return obj
+
+
+def refresh_layout_preview(scene, graph: dict) -> dict:
+    """Rebuild the independent Blender viewport preview for one draft graph."""
+
+    clear_layout_preview()
+    collection = bpy.data.collections.new(LAYOUT_PREVIEW_COLLECTION)
+    scene.collection.children.link(collection)
+
+    base_object = bpy.data.objects.get(ICITY_BASE_OBJECT)
+    matrix_world = getattr(base_object, "matrix_world", None)
+    geometry = build_layout_preview_geometry(
+        graph,
+        road_width=scene.icity_layout_preview_road_width,
+        node_radius=scene.icity_layout_preview_node_radius,
+        preview_height=scene.icity_layout_preview_height,
+    )
+    materials = {
+        "nodes": _ensure_preview_material("ICity Layout Preview Node Material", (1.0, 0.2, 0.05, 1.0)),
+        "roads": _ensure_preview_material("ICity Layout Preview Road Material", (0.05, 0.45, 1.0, 1.0)),
+        "disabled_roads": _ensure_preview_material(
+            "ICity Layout Preview Disabled Road Material",
+            (0.45, 0.45, 0.45, 1.0),
+        ),
+        "blocks": _ensure_preview_material("ICity Layout Preview Block Material", (0.1, 0.8, 0.35, 0.35)),
+    }
+    object_names = {
+        "nodes": LAYOUT_PREVIEW_NODES,
+        "roads": LAYOUT_PREVIEW_ROADS,
+        "disabled_roads": LAYOUT_PREVIEW_DISABLED_ROADS,
+        "blocks": LAYOUT_PREVIEW_BLOCKS,
+    }
+    created = 0
+    for key in ("blocks", "roads", "disabled_roads", "nodes"):
+        if _create_preview_mesh_object(
+            collection,
+            object_names[key],
+            geometry[key],
+            materials[key],
+            matrix_world,
+        ) is not None:
+            created += 1
+    return {
+        "objects": created,
+        "nodes": len(graph.get("nodes", [])),
+        "edges": len(graph.get("edges", [])),
+        "blocks": len(infer_face_loops_from_graph(graph)),
+    }
 
 
 class ICITY_OT_InspectLayoutContract(Operator):
@@ -1043,6 +1363,45 @@ class ICITY_OT_NormalizeLayoutDraft(Operator):
         return {"FINISHED"}
 
 
+class ICITY_OT_RefreshLayoutDraftPreview(Operator):
+    bl_idname = "icity.refresh_layout_draft_preview"
+    bl_label = "Show / Refresh Draft Preview"
+    bl_description = "Display the current draft as independent visible geometry without modifying ICity Base"
+    bl_options = {"REGISTER", "UNDO"}
+
+    def execute(self, context):
+        try:
+            graph = build_layout_graph_from_draft(context.scene)
+            validation = validate_layout_graph(graph)
+            if validation["errors"]:
+                write_validation_details(context.scene, validation)
+                raise RuntimeError("Draft contains validation errors. Fix them before previewing.")
+            stats = refresh_layout_preview(context.scene, graph)
+        except Exception as exc:  # pragma: no cover - surfaced in Blender UI
+            self.report({"ERROR"}, f"Refresh layout preview failed: {exc}")
+            return {"CANCELLED"}
+
+        context.scene.icity_layout_draft_summary = (
+            f"Preview: {stats['nodes']} nodes, {stats['edges']} edges, "
+            f"{stats['blocks']} blocks, {stats['objects']} preview objects"
+        )
+        self.report({"INFO"}, "Layout draft preview refreshed.")
+        return {"FINISHED"}
+
+
+class ICITY_OT_ClearLayoutDraftPreview(Operator):
+    bl_idname = "icity.clear_layout_draft_preview"
+    bl_label = "Clear Draft Preview"
+    bl_description = "Remove only the independent layout draft preview objects"
+    bl_options = {"REGISTER", "UNDO"}
+
+    def execute(self, context):
+        removed = clear_layout_preview()
+        context.scene.icity_layout_draft_summary = f"Cleared {removed} preview object(s)."
+        self.report({"INFO"}, "Layout draft preview cleared.")
+        return {"FINISHED"}
+
+
 class ICITY_PT_LayoutControlPanel(Panel):
     """Entry point for layout-control phases.
 
@@ -1148,11 +1507,21 @@ class ICITY_PT_LayoutControlPanel(Panel):
                 validation_box.label(text=line, icon="ERROR" if line.startswith("ERROR:") else "INFO")
 
         normalize_box = draft_box.box()
-        normalize_box.label(text="Phase 3 Topology Normalize (Draft Only)", icon="MODIFIER")
+        normalize_box.label(text="Draft Topology Normalize", icon="MODIFIER")
         normalize_box.prop(context.scene, "icity_layout_merge_distance")
         normalize_box.prop(context.scene, "icity_layout_intersection_tolerance")
         normalize_box.prop(context.scene, "icity_layout_minimum_edge_length")
         normalize_box.operator("icity.normalize_layout_draft", icon="AUTOMERGE_ON")
+
+        preview_box = draft_box.box()
+        preview_box.label(text="Draft Viewport Preview", icon="HIDE_OFF")
+        preview_box.label(text="Independent preview; does not modify ICity Base")
+        preview_box.prop(context.scene, "icity_layout_preview_road_width")
+        preview_box.prop(context.scene, "icity_layout_preview_node_radius")
+        preview_box.prop(context.scene, "icity_layout_preview_height")
+        preview_actions = preview_box.row(align=True)
+        preview_actions.operator("icity.refresh_layout_draft_preview", icon="FILE_REFRESH")
+        preview_actions.operator("icity.clear_layout_draft_preview", icon="TRASH")
 
         node_list_box = draft_box.box()
         node_list_box.label(text="Editable Nodes", icon="VERTEXSEL")
@@ -1214,6 +1583,8 @@ CLASSES = (
     ICITY_OT_RemoveLayoutDraftEdge,
     ICITY_OT_ValidateLayoutDraft,
     ICITY_OT_NormalizeLayoutDraft,
+    ICITY_OT_RefreshLayoutDraftPreview,
+    ICITY_OT_ClearLayoutDraftPreview,
     ICITY_PT_LayoutControlPanel,
 )
 
@@ -1258,12 +1629,32 @@ def register() -> None:
         default=0.001,
         min=0.0,
     )
+    bpy.types.Scene.icity_layout_preview_road_width = FloatProperty(
+        name="Preview Road Width",
+        description="Visible width of draft road ribbons in the Blender viewport",
+        default=2.5,
+        min=0.05,
+    )
+    bpy.types.Scene.icity_layout_preview_node_radius = FloatProperty(
+        name="Preview Node Radius",
+        description="Visible radius of draft node markers",
+        default=1.2,
+        min=0.05,
+    )
+    bpy.types.Scene.icity_layout_preview_height = FloatProperty(
+        name="Preview Height",
+        description="Local Z offset keeping the preview visible above the current city",
+        default=0.4,
+    )
 
 
 def unregister() -> None:
     for property_name in (
         "icity_layout_edge_index",
         "icity_layout_node_index",
+        "icity_layout_preview_height",
+        "icity_layout_preview_node_radius",
+        "icity_layout_preview_road_width",
         "icity_layout_minimum_edge_length",
         "icity_layout_intersection_tolerance",
         "icity_layout_merge_distance",

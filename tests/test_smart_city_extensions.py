@@ -305,6 +305,9 @@ class SmartCityExtensionTests(unittest.TestCase):
         self.assertIn("ICITY_OT_RemoveLayoutDraftEdge", class_names)
         self.assertIn("ICITY_OT_ValidateLayoutDraft", class_names)
         self.assertIn("ICITY_OT_NormalizeLayoutDraft", class_names)
+        self.assertIn("ICITY_OT_RefreshLayoutDraftPreview", class_names)
+        self.assertIn("ICITY_OT_ClearLayoutDraftPreview", class_names)
+        self.assertNotIn("ICITY_OT_ApplyLayoutDraftToBase", class_names)
         self.assertIn("ICITY_UL_LayoutNodeList", class_names)
         self.assertIn("ICITY_UL_LayoutEdgeList", class_names)
         self.assertIn("ICITY_PT_LayoutControlPanel", class_names)
@@ -418,6 +421,43 @@ class SmartCityExtensionTests(unittest.TestCase):
         self.assertEqual(scene.icity_layout_edges[0].start_node_id, "n0")
         self.assertEqual(exported["nodes"][1]["id"], "n1")
         self.assertEqual(exported["edges"][0]["end"], "n1")
+
+    def test_layout_draft_export_infers_closed_face_loops(self):
+        layout_control = load_module("layout_control_draft_faces", "iCity/smart_city/layout_control.py")
+
+        class FakeCollection(list):
+            def add(self):
+                item = types.SimpleNamespace()
+                self.append(item)
+                return item
+
+            def remove(self, index):
+                del self[index]
+
+        scene = types.SimpleNamespace(
+            icity_layout_nodes=FakeCollection(),
+            icity_layout_edges=FakeCollection(),
+        )
+        graph = {
+            "nodes": [
+                {"id": "n0", "source_index": 0, "x": 0.0, "y": 0.0, "z": 0.0},
+                {"id": "n1", "source_index": 1, "x": 10.0, "y": 0.0, "z": 0.0},
+                {"id": "n2", "source_index": 2, "x": 10.0, "y": 10.0, "z": 0.0},
+                {"id": "n3", "source_index": 3, "x": 0.0, "y": 10.0, "z": 0.0},
+            ],
+            "edges": [
+                {"id": "e0", "source_index": 0, "start": "n0", "end": "n1", "enabled_as_road": True},
+                {"id": "e1", "source_index": 1, "start": "n1", "end": "n2", "enabled_as_road": True},
+                {"id": "e2", "source_index": 2, "start": "n2", "end": "n3", "enabled_as_road": True},
+                {"id": "e3", "source_index": 3, "start": "n3", "end": "n0", "enabled_as_road": True},
+            ],
+        }
+
+        layout_control.populate_layout_draft(scene, graph)
+        exported = layout_control.build_layout_graph_from_draft(scene)
+
+        self.assertEqual(len(exported["faces"]), 1)
+        self.assertEqual(set(exported["faces"][0]["vertices"]), {"n0", "n1", "n2", "n3"})
 
     def test_layout_draft_add_remove_helpers_manage_ids_and_connected_edges(self):
         layout_control = load_module("layout_control_draft_helpers", "iCity/smart_city/layout_control.py")
@@ -567,6 +607,62 @@ class SmartCityExtensionTests(unittest.TestCase):
         self.assertEqual(normalized["edges"], [])
         self.assertEqual(stats["removed_invalid_edges"], 1)
         self.assertEqual(stats["removed_short_edges"], 1)
+
+    def test_layout_face_inference_uses_closed_chordless_cycles(self):
+        layout_control = load_module("layout_control_faces", "iCity/smart_city/layout_control.py")
+        graph = {
+            "nodes": [
+                {"id": "n0", "x": 0.0, "y": 0.0, "z": 0.0},
+                {"id": "n1", "x": 10.0, "y": 0.0, "z": 0.0},
+                {"id": "n2", "x": 10.0, "y": 10.0, "z": 0.0},
+                {"id": "n3", "x": 0.0, "y": 10.0, "z": 0.0},
+            ],
+            "edges": [
+                {"start": "n0", "end": "n1", "enabled_as_road": True},
+                {"start": "n1", "end": "n2", "enabled_as_road": True},
+                {"start": "n2", "end": "n3", "enabled_as_road": True},
+                {"start": "n3", "end": "n0", "enabled_as_road": True},
+            ],
+            "faces": [],
+        }
+
+        faces = layout_control.infer_face_loops_from_graph(graph)
+
+        self.assertEqual(len(faces), 1)
+        self.assertEqual(set(faces[0]), {"n0", "n1", "n2", "n3"})
+
+    def test_layout_preview_geometry_builds_visible_nodes_roads_and_blocks(self):
+        layout_control = load_module("layout_control_preview_geometry", "iCity/smart_city/layout_control.py")
+        graph = {
+            "nodes": [
+                {"id": "n0", "x": 0.0, "y": 0.0, "z": 0.0},
+                {"id": "n1", "x": 10.0, "y": 0.0, "z": 0.0},
+                {"id": "n2", "x": 10.0, "y": 10.0, "z": 0.0},
+                {"id": "n3", "x": 0.0, "y": 10.0, "z": 0.0},
+            ],
+            "edges": [
+                {"start": "n0", "end": "n1", "enabled_as_road": True},
+                {"start": "n1", "end": "n2", "enabled_as_road": True},
+                {"start": "n2", "end": "n3", "enabled_as_road": False},
+                {"start": "n3", "end": "n0", "enabled_as_road": True},
+            ],
+            "faces": [{"vertices": ["n0", "n1", "n2", "n3"]}],
+        }
+
+        geometry = layout_control.build_layout_preview_geometry(
+            graph,
+            road_width=2.0,
+            node_radius=1.0,
+            preview_height=0.5,
+        )
+
+        self.assertEqual(len(geometry["nodes"]["vertices"]), 24)
+        self.assertEqual(len(geometry["nodes"]["faces"]), 32)
+        self.assertEqual(len(geometry["roads"]["faces"]), 3)
+        self.assertEqual(len(geometry["disabled_roads"]["faces"]), 1)
+        self.assertEqual(len(geometry["blocks"]["faces"]), 1)
+        first_road_vertex = geometry["roads"]["vertices"][0]
+        self.assertEqual(first_road_vertex, (0.0, 1.0, 0.5))
 
     def test_vehicle_motion_points_from_open_chain_ping_pong_without_shortcut(self):
         traffic_extension = load_module("traffic_extension_pingpong", "iCity/smart_city/traffic_extension.py")
