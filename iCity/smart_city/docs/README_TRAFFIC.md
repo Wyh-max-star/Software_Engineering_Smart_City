@@ -36,6 +36,9 @@ The module is independent from `ICity Ecology`.
    - `Cars`
    - `Taxis`
    - `Buses`
+   - `Random Seed`
+   - `Randomness`
+   - `Scale Jitter`
    - `Traffic Offset`
    - `Lane Gap`
    - `Walkway Offset`
@@ -89,6 +92,12 @@ Expected:
 
 - vehicles move along real iCity road-aligned paths
 - vehicles do not cut through building masses
+- each extracted iCity road creates two directional vehicle lanes, one forward and one reverse
+- cars, taxis, and buses are assigned to available road lanes through the seeded scheduler
+- vehicles start from different route phases instead of forming a rigid line
+- changing `Random Seed` changes route/phase/scale distribution; keeping the same seed keeps the demo reproducible
+- increasing `Randomness` makes route, lane, direction, and start timing less uniform
+- increasing `Scale Jitter` gives cars and buses mild size variation
 - cars and taxis use the bundled Chevrolet model when the asset is present
 - buses use the bundled low-poly bus model when the asset is present
 

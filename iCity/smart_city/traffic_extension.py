@@ -9,6 +9,7 @@ from __future__ import annotations
 import importlib
 import importlib.util
 import math
+import random
 from pathlib import Path
 
 import bpy
@@ -258,6 +259,115 @@ def vehicle_type_sequence(settings) -> list[str]:
             sequence.append("CAR")
             cars -= 1
     return sequence
+
+
+def _randomized_route_cycle(route_count: int, rng: random.Random, randomness: float) -> list[int]:
+    route_indices = list(range(max(int(route_count), 0)))
+    if randomness > 0.0 and len(route_indices) > 1:
+        rng.shuffle(route_indices)
+    return route_indices
+
+
+def _choose_vehicle_route(
+    vehicle_type: str,
+    passenger_route_count: int,
+    bus_route_count: int,
+    route_cycles: dict[str, list[int]],
+    rng: random.Random,
+    randomness: float,
+) -> tuple[str, int] | None:
+    if vehicle_type == "BUS" and bus_route_count > 0:
+        route_kind = "bus"
+        route_count = bus_route_count
+    elif passenger_route_count > 0:
+        route_kind = "passenger"
+        route_count = passenger_route_count
+    elif bus_route_count > 0:
+        route_kind = "bus"
+        route_count = bus_route_count
+    else:
+        return None
+
+    if not route_cycles.get(route_kind):
+        route_cycles[route_kind] = _randomized_route_cycle(route_count, rng, randomness)
+    return route_kind, route_cycles[route_kind].pop(0)
+
+
+def _assign_route_phases(
+    assignments: list[dict],
+    *,
+    rng: random.Random,
+    randomness: float,
+    min_phase_gap: float,
+) -> None:
+    assignments_by_route: dict[tuple[str, int], list[dict]] = {}
+    for assignment in assignments:
+        key = (assignment["route_kind"], assignment["route_index"])
+        assignments_by_route.setdefault(key, []).append(assignment)
+
+    for route_assignments in assignments_by_route.values():
+        route_total = len(route_assignments)
+        if route_total == 1:
+            route_assignments[0]["phase_start"] = round((rng.random() * randomness) % 1.0, 6)
+            continue
+
+        cell_width = 1.0 / route_total
+        feasible_gap = min(max(float(min_phase_gap), 0.0), cell_width)
+        jitter_limit = max((cell_width - feasible_gap) * 0.5, 0.0) * randomness
+        route_origin = rng.random() * cell_width * randomness
+        for slot_index, assignment in enumerate(route_assignments):
+            phase = route_origin + slot_index * cell_width
+            if jitter_limit > 0.0:
+                phase += rng.uniform(-jitter_limit, jitter_limit)
+            assignment["phase_start"] = round(phase % 1.0, 6)
+
+
+def plan_vehicle_assignments(
+    sequence: list[str],
+    *,
+    passenger_route_count: int,
+    bus_route_count: int,
+    seed: int = 12,
+    randomness: float = 0.35,
+    min_phase_gap: float = 0.08,
+    scale_jitter: float = 0.06,
+) -> list[dict]:
+    """Create deterministic random vehicle route/phase/scale assignments."""
+    randomness = _clamp(float(randomness), 0.0, 1.0)
+    scale_jitter = _clamp(float(scale_jitter), 0.0, 0.25)
+    rng = random.Random(int(seed))
+    route_cycles: dict[str, list[int]] = {}
+    assignments: list[dict] = []
+
+    for vehicle_type in sequence:
+        route = _choose_vehicle_route(
+            vehicle_type,
+            max(int(passenger_route_count), 0),
+            max(int(bus_route_count), 0),
+            route_cycles,
+            rng,
+            randomness,
+        )
+        if route is None:
+            continue
+
+        route_kind, route_index = route
+        if scale_jitter > 0.0 and randomness > 0.0:
+            scale_factor = 1.0 + rng.uniform(-scale_jitter, scale_jitter) * randomness
+        else:
+            scale_factor = 1.0
+        assignments.append(
+            {
+                "vehicle_type": vehicle_type,
+                "route_kind": route_kind,
+                "route_index": route_index,
+                "phase_start": 0.0,
+                "scale_factor": round(scale_factor, 6),
+            }
+        )
+
+    _assign_route_phases(assignments, rng=rng, randomness=randomness, min_phase_gap=min_phase_gap)
+    return assignments
 
 
 def clear_traffic() -> None:
@@ -1100,15 +1210,30 @@ def _generate_vehicles(settings, path_collection, vehicle_collection, surface_po
     )
 
     sequence = vehicle_type_sequence(settings)
-    total = max(len(sequence), 1)
     base_vehicle_scale = _clamp(getattr(settings, "vehicle_scale", 0.78), 0.3, 2.4)
     bus_scale = _clamp(getattr(settings, "bus_scale", 1.18), 0.5, 3.0)
     vehicle_templates: dict[str, dict | None] = {}
+    assignments = plan_vehicle_assignments(
+        sequence,
+        passenger_route_count=1,
+        bus_route_count=1,
+        seed=getattr(settings, "traffic_random_seed", 12),
+        randomness=getattr(settings, "traffic_randomness", 0.35),
+        scale_jitter=getattr(settings, "vehicle_scale_jitter", 0.06),
+    )
+    path_pools = {
+        "passenger": [path_inner],
+        "bus": [path_outer],
+    }
 
-    for index, vehicle_type in enumerate(sequence):
-        phase = index / total
-        path_obj = path_outer if vehicle_type == "BUS" else path_inner
+    for index, assignment in enumerate(assignments):
+        vehicle_type = assignment["vehicle_type"]
+        path_pool = path_pools.get(assignment["route_kind"], [])
+        if not path_pool:
+            continue
+        path_obj = path_pool[assignment["route_index"] % len(path_pool)]
         mesh_scale = bus_scale if vehicle_type == "BUS" else base_vehicle_scale
+        mesh_scale *= float(assignment["scale_factor"])
         profile = bundled_vehicle_profile(vehicle_type)
         template = vehicle_templates.get(vehicle_type)
         if vehicle_type not in vehicle_templates:
@@ -1124,7 +1249,7 @@ def _generate_vehicles(settings, path_collection, vehicle_collection, surface_po
                 path_obj=path_obj,
                 frame_start=frame_start,
                 frame_end=frame_end,
-                phase_start=phase,
+                phase_start=float(assignment["phase_start"]),
                 scale=mesh_scale * float(profile["scale_ratio"]),
                 rotation_z_correction=float(profile["rotation_z_correction"]),
                 ground_offset=float(profile["ground_offset"]),
@@ -1141,7 +1266,7 @@ def _generate_vehicles(settings, path_collection, vehicle_collection, surface_po
             path_obj=path_obj,
             frame_start=frame_start,
             frame_end=frame_end,
-            phase_start=phase,
+            phase_start=float(assignment["phase_start"]),
             bobbing=(0.02, 0.05),
         )
 
@@ -1180,27 +1305,48 @@ def _generate_vehicles_on_road_paths(settings, path_collection, vehicle_collecti
     bus_route_paths = []
     lane_offset = abs(float(passenger_profile["lane_offset"]))
     passenger_offsets = (lane_offset, -lane_offset) if lane_offset > 1e-6 else (0.0,)
+    bus_lane_offset = abs(float(bus_profile["lane_offset"]))
+    if bus_lane_offset <= 1e-6:
+        bus_lane_offset = lane_offset
+    bus_offsets = (bus_lane_offset, -bus_lane_offset) if bus_lane_offset > 1e-6 else (0.0,)
+
+    def create_vehicle_path(name: str, motion_points: list[Vector], pool: list) -> None:
+        if len(motion_points) < 2:
+            return
+        path_obj = ecology_common.create_follow_path(
+            name,
+            motion_points,
+            path_collection,
+            Vector((0.0, 0.0, 0.0)),
+            frame_count,
+        )
+        pool.append(path_obj)
 
     for route_index, road_path in enumerate(road_paths):
-        prepared_bus_path = prepare_vehicle_path(
-            road_path,
-            lane_offset=0.0,
-            sample_spacing=float(bus_profile["sample_spacing"]),
-            smoothing_iterations=int(bus_profile["smoothing_iterations"]),
-            corner_rounding_radius=float(bus_profile["corner_rounding_radius"]),
-            corner_rounding_segments=int(bus_profile["corner_rounding_segments"]),
-            corner_max_angle_deg=float(bus_profile["corner_max_angle_deg"]),
-        )
-        bus_motion_points = vehicle_motion_points_from_chain(prepared_bus_path)
-        if len(bus_motion_points) >= 2:
-            path_obj = ecology_common.create_follow_path(
-                f"ICITY_TRAFFIC_RoadPath_Bus_{route_index + 1}",
-                bus_motion_points,
-                path_collection,
-                Vector((0.0, 0.0, 0.0)),
-                frame_count,
+        for bus_lane_index, offset in enumerate(bus_offsets):
+            prepared_bus_path = prepare_vehicle_path(
+                road_path,
+                lane_offset=offset,
+                sample_spacing=float(bus_profile["sample_spacing"]),
+                smoothing_iterations=int(bus_profile["smoothing_iterations"]),
+                corner_rounding_radius=float(bus_profile["corner_rounding_radius"]),
+                corner_rounding_segments=int(bus_profile["corner_rounding_segments"]),
+                corner_max_angle_deg=float(bus_profile["corner_max_angle_deg"]),
             )
-            bus_route_paths.append(path_obj)
+            bus_motion_points = vehicle_motion_points_from_chain(prepared_bus_path)
+            bus_reverse_motion_points = vehicle_motion_points_from_chain(list(reversed(prepared_bus_path)))
+            if bus_lane_index % 2 == 1:
+                create_vehicle_path(
+                    f"ICITY_TRAFFIC_RoadPath_Bus_{route_index + 1}_Lane_{bus_lane_index + 1}_Reverse",
+                    bus_reverse_motion_points,
+                    bus_route_paths,
+                )
+            else:
+                create_vehicle_path(
+                    f"ICITY_TRAFFIC_RoadPath_Bus_{route_index + 1}_Lane_{bus_lane_index + 1}",
+                    bus_motion_points,
+                    bus_route_paths,
+                )
 
         for lane_index, offset in enumerate(passenger_offsets):
             prepared_path = prepare_vehicle_path(
@@ -1213,28 +1359,44 @@ def _generate_vehicles_on_road_paths(settings, path_collection, vehicle_collecti
                 corner_max_angle_deg=float(passenger_profile["corner_max_angle_deg"]),
             )
             motion_points = vehicle_motion_points_from_chain(prepared_path)
-            if len(motion_points) < 2:
-                continue
-            path_obj = ecology_common.create_follow_path(
-                f"ICITY_TRAFFIC_RoadPath_{route_index + 1}_Lane_{lane_index + 1}",
-                motion_points,
-                path_collection,
-                Vector((0.0, 0.0, 0.0)),
-                frame_count,
-            )
-            passenger_route_paths.append(path_obj)
+            reverse_motion_points = vehicle_motion_points_from_chain(list(reversed(prepared_path)))
+            if lane_index % 2 == 1:
+                create_vehicle_path(
+                    f"ICITY_TRAFFIC_RoadPath_{route_index + 1}_Lane_{lane_index + 1}_Reverse",
+                    reverse_motion_points,
+                    passenger_route_paths,
+                )
+            else:
+                create_vehicle_path(
+                    f"ICITY_TRAFFIC_RoadPath_{route_index + 1}_Lane_{lane_index + 1}",
+                    motion_points,
+                    passenger_route_paths,
+                )
 
     if not passenger_route_paths and not bus_route_paths:
         return
 
-    total = max(len(sequence), 1)
     vehicle_templates: dict[str, dict | None] = {}
-    for index, vehicle_type in enumerate(sequence):
-        path_pool = bus_route_paths if vehicle_type == "BUS" and bus_route_paths else passenger_route_paths or bus_route_paths
+    assignments = plan_vehicle_assignments(
+        sequence,
+        passenger_route_count=len(passenger_route_paths),
+        bus_route_count=len(bus_route_paths),
+        seed=getattr(settings, "traffic_random_seed", 12),
+        randomness=getattr(settings, "traffic_randomness", 0.35),
+        scale_jitter=getattr(settings, "vehicle_scale_jitter", 0.06),
+    )
+    path_pools = {
+        "passenger": passenger_route_paths,
+        "bus": bus_route_paths,
+    }
+    for index, assignment in enumerate(assignments):
+        vehicle_type = assignment["vehicle_type"]
+        path_pool = path_pools.get(assignment["route_kind"], [])
         if not path_pool:
             continue
-        path_obj = path_pool[index % len(path_pool)]
+        path_obj = path_pool[assignment["route_index"] % len(path_pool)]
         mesh_scale = bus_scale if vehicle_type == "BUS" else base_vehicle_scale
+        mesh_scale *= float(assignment["scale_factor"])
         profile = bundled_vehicle_profile(vehicle_type)
         template = vehicle_templates.get(vehicle_type)
         if vehicle_type not in vehicle_templates:
@@ -1250,7 +1412,7 @@ def _generate_vehicles_on_road_paths(settings, path_collection, vehicle_collecti
                 path_obj=path_obj,
                 frame_start=frame_start,
                 frame_end=frame_end,
-                phase_start=index / total,
+                phase_start=float(assignment["phase_start"]),
                 scale=mesh_scale * float(profile["scale_ratio"]),
                 rotation_z_correction=float(profile["rotation_z_correction"]),
                 ground_offset=float(profile["ground_offset"]),
@@ -1267,7 +1429,7 @@ def _generate_vehicles_on_road_paths(settings, path_collection, vehicle_collecti
             path_obj=path_obj,
             frame_start=frame_start,
             frame_end=frame_end,
-            phase_start=index / total,
+            phase_start=float(assignment["phase_start"]),
             bobbing=(0.02, 0.05),
         )
 
@@ -1316,6 +1478,9 @@ class ICITY_TrafficSettings(PropertyGroup):
     walkway_width: FloatProperty(name="Walkway Width", default=1.8, min=0.8, max=6.0)
     vehicle_scale: FloatProperty(name="Vehicle Scale", default=0.78, min=0.3, max=2.4)
     bus_scale: FloatProperty(name="Bus Scale", default=1.18, min=0.5, max=3.0)
+    traffic_random_seed: IntProperty(name="Random Seed", default=12, min=0, max=999999)
+    traffic_randomness: FloatProperty(name="Randomness", default=0.35, min=0.0, max=1.0)
+    vehicle_scale_jitter: FloatProperty(name="Scale Jitter", default=0.06, min=0.0, max=0.25)
 
 
 class ICITY_OT_GenerateTraffic(Operator):
@@ -1388,6 +1553,12 @@ class ICITY_PT_TrafficPanel(Panel):
         scale_box.label(text="Scale", icon="EMPTY_AXIS")
         scale_box.prop(settings, "vehicle_scale")
         scale_box.prop(settings, "bus_scale")
+        scale_box.prop(settings, "vehicle_scale_jitter")
+
+        random_box = layout.box()
+        random_box.label(text="Randomness", icon="MOD_NOISE")
+        random_box.prop(settings, "traffic_random_seed")
+        random_box.prop(settings, "traffic_randomness")
 
         anim_box = layout.box()
         anim_box.label(text="Animation", icon="TIME")
