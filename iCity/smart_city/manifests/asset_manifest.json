@@ -1,0 +1,133 @@
+{
+  "textures": [
+    {
+      "id": "road_clean_custom_01",
+      "name": "Custom Clean Road",
+      "category": "road_texture",
+      "path": "assets/Assets/Default/textures/Road 4 clean_BaseColor.jpg",
+      "usage": "road_material",
+      "license": "Existing iCity classroom project asset"
+    }
+  ],
+  "objects": [
+    {
+      "id": "street_lamp_custom_01",
+      "name": "Street Lamp Demo",
+      "category": "roadside_asset",
+      "path": "assets/Assets/Default/Road/Road assets.blend",
+      "object_name": "Light1_Light_ICity_Default",
+      "usage": "roadside_asset",
+      "license": "Existing iCity classroom project asset"
+    },
+    {
+      "id": "vehicle_chevrolet_m1009_01",
+      "name": "1986 Chevrolet M1009",
+      "category": "traffic_vehicle",
+      "path": "assets/vehicles/1986_chevrolet_m1009.blend",
+      "collection_name": "1986 Chevrolet M1009",
+      "object_name": "1986 Chevrolet M1009",
+      "rotation_z_correction": 1.5707963267948966,
+      "scale_ratio": 0.54,
+      "ground_offset": 0.035,
+      "lane_offset": 0.6,
+      "sample_spacing": 0.75,
+      "smoothing_iterations": 3,
+      "corner_rounding_radius": 2.0,
+      "corner_rounding_segments": 7,
+      "corner_max_angle_deg": 135.0,
+      "usage": "traffic_vehicle",
+      "license": "External vehicle model; verify redistribution terms before public release"
+    },
+    {
+      "id": "vehicle_lowpoly_bus_01",
+      "name": "Low Poly Bus",
+      "category": "traffic_vehicle",
+      "path": "assets/vehicles/lowpoly_bus.blend",
+      "collection_name": "Low Poly Retro Van",
+      "object_name": "Low Poly Retro Van",
+      "rotation_z_correction": 1.5707963267948966,
+      "scale_ratio": 0.82,
+      "ground_offset": 0.02,
+      "lane_offset": 0.0,
+      "sample_spacing": 0.9,
+      "smoothing_iterations": 4,
+      "corner_rounding_radius": 2.6,
+      "corner_rounding_segments": 9,
+      "corner_max_angle_deg": 145.0,
+      "usage": "traffic_vehicle",
+      "license": "External vehicle model; verify redistribution terms before public release"
+    },
+    {
+      "id": "planter_box_proc_01",
+      "name": "Planter Box Procedural",
+      "category": "roadside_asset",
+      "path": "procedural://planter_box_proc_01",
+      "usage": "roadside_asset",
+      "license": "Team procedural asset"
+    },
+    {
+      "id": "bollard_cluster_proc_01",
+      "name": "Bollard Cluster Procedural",
+      "category": "roadside_asset",
+      "path": "procedural://bollard_cluster_proc_01",
+      "usage": "roadside_asset",
+      "license": "Team procedural asset"
+    },
+    {
+      "id": "bench_variant_proc_01",
+      "name": "Bench Variant Procedural",
+      "category": "roadside_asset",
+      "path": "procedural://bench_variant_proc_01",
+      "usage": "roadside_asset",
+      "license": "Team procedural asset"
+    },
+    {
+      "id": "bus_stop_proc_01",
+      "name": "Bus Stop Sign Procedural",
+      "category": "roadside_asset",
+      "path": "procedural://bus_stop_proc_01",
+      "usage": "roadside_asset",
+      "license": "Team procedural asset"
+    },
+    {
+      "id": "dock_pier_proc_01",
+      "name": "Dock Pier Procedural",
+      "category": "ecology_asset",
+      "path": "procedural://dock_pier_proc_01",
+      "usage": "ecology_asset",
+      "license": "Team procedural asset"
+    },
+    {
+      "id": "tree_cluster_proc_01",
+      "name": "Tree Cluster Procedural",
+      "category": "ecology_asset",
+      "path": "procedural://tree_cluster_proc_01",
+      "usage": "ecology_asset",
+      "license": "Team procedural asset"
+    },
+    {
+      "id": "shrub_patch_proc_01",
+      "name": "Shrub Patch Procedural",
+      "category": "ecology_asset",
+      "path": "procedural://shrub_patch_proc_01",
+      "usage": "ecology_asset",
+      "license": "Team procedural asset"
+    },
+    {
+      "id": "person_walking_fbx_01",
+      "name": "Pedestrian Walking Character",
+      "category": "pedestrian_asset",
+      "path": "assets/Assets/Default/People/Walking.fbx",
+      "usage": "pedestrian_walker",
+      "license": "Existing iCity classroom project asset"
+    },
+    {
+      "id": "person_standing_fbx_01",
+      "name": "Pedestrian Standing Character",
+      "category": "pedestrian_asset",
+      "path": "assets/Assets/Default/People/Standing.fbx",
+      "usage": "pedestrian_idler",
+      "license": "Existing iCity classroom project asset"
+    }
+  ]
+}
