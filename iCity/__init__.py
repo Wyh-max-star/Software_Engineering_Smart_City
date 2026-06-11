@@ -31,9 +31,9 @@ import os
 from bpy.app.handlers import persistent
 
 try:
-    from .smart_city import asset_extension, ecology_extension, traffic_extension, pedestrian_extension, layout_control
+    from .smart_city import asset_extension, ecology_extension, traffic_extension, pedestrian_extension, layout_control,template_extension
 except ImportError:
-    from smart_city import asset_extension, ecology_extension, traffic_extension, pedestrian_extension, layout_control
+    from smart_city import asset_extension, ecology_extension, traffic_extension, pedestrian_extension, layout_control,template_extension
 
 
 addon_keymaps = {}
@@ -3442,6 +3442,7 @@ def register():
     traffic_extension.register()
     pedestrian_extension.register()
     layout_control.register()
+    template_extension.register()
     kc = bpy.context.window_manager.keyconfigs.addon
     km = kc.keymaps.new(name='Window', space_type='EMPTY')
     kmi = km.keymap_items.new('sna.open_addon_prefrences_34afe', 'M', 'PRESS',
@@ -3452,6 +3453,7 @@ def register():
 def unregister():
     global _icons
     layout_control.unregister()
+    template_extension.unregister()
     pedestrian_extension.unregister()
     traffic_extension.unregister()
     asset_extension.unregister()

@@ -164,6 +164,71 @@ class SmartCityExtensionTests(unittest.TestCase):
         self.assertEqual(sequence.count("BUS"), 1)
         self.assertEqual(sequence[0], "BUS")
 
+    def test_plan_vehicle_assignments_uses_seeded_route_randomness(self):
+        traffic_extension = load_module("traffic_extension_vehicle_random_routes", "iCity/smart_city/traffic_extension.py")
+        sequence = ["BUS", "TAXI", "CAR", "CAR", "TAXI", "CAR", "CAR", "BUS"]
+
+        first = traffic_extension.plan_vehicle_assignments(
+            sequence,
+            passenger_route_count=4,
+            bus_route_count=2,
+            seed=17,
+            randomness=0.8,
+            min_phase_gap=0.12,
+            scale_jitter=0.08,
+        )
+        second = traffic_extension.plan_vehicle_assignments(
+            sequence,
+            passenger_route_count=4,
+            bus_route_count=2,
+            seed=17,
+            randomness=0.8,
+            min_phase_gap=0.12,
+            scale_jitter=0.08,
+        )
+        different_seed = traffic_extension.plan_vehicle_assignments(
+            sequence,
+            passenger_route_count=4,
+            bus_route_count=2,
+            seed=18,
+            randomness=0.8,
+            min_phase_gap=0.12,
+            scale_jitter=0.08,
+        )
+
+        self.assertEqual(first, second)
+        self.assertNotEqual(
+            [(item["route_kind"], item["route_index"], item["phase_start"], item["scale_factor"]) for item in first],
+            [(item["route_kind"], item["route_index"], item["phase_start"], item["scale_factor"]) for item in different_seed],
+        )
+        self.assertTrue(all(0.0 <= item["phase_start"] < 1.0 for item in first))
+        self.assertTrue(all(0.92 <= item["scale_factor"] <= 1.08 for item in first))
+        self.assertTrue(all(item["route_kind"] == "bus" for item in first if item["vehicle_type"] == "BUS"))
+        self.assertTrue(all(item["route_kind"] == "passenger" for item in first if item["vehicle_type"] != "BUS"))
+        self.assertNotEqual([item["route_index"] for item in first if item["route_kind"] == "passenger"], [0, 1, 2, 3, 0, 1])
+
+    def test_plan_vehicle_assignments_keeps_same_route_phase_spacing(self):
+        traffic_extension = load_module("traffic_extension_vehicle_random_spacing", "iCity/smart_city/traffic_extension.py")
+        sequence = ["CAR"] * 5
+
+        assignments = traffic_extension.plan_vehicle_assignments(
+            sequence,
+            passenger_route_count=1,
+            bus_route_count=0,
+            seed=9,
+            randomness=1.0,
+            min_phase_gap=0.12,
+            scale_jitter=0.0,
+        )
+
+        phases = sorted(item["phase_start"] for item in assignments)
+        gaps = [phases[index + 1] - phases[index] for index in range(len(phases) - 1)]
+        gaps.append((phases[0] + 1.0) - phases[-1])
+
+        self.assertTrue(all(gap >= 0.12 for gap in gaps))
+        self.assertTrue(any(phase not in {0.0, 0.2, 0.4, 0.6, 0.8} for phase in phases))
+        self.assertTrue(all(item["scale_factor"] == 1.0 for item in assignments))
+
     def test_clear_traffic_module_only_removes_traffic_collections(self):
         traffic_extension = load_module("traffic_extension_clear", "iCity/smart_city/traffic_extension.py")
         calls = []
@@ -1194,6 +1259,296 @@ class SmartCityExtensionTests(unittest.TestCase):
         self.assertEqual(generated, [("vehicles", 1)])
         self.assertEqual(frame_calls, [1])
 
+    def test_load_bundled_vehicle_template_supports_bus_asset(self):
+        traffic_extension = load_module("traffic_extension_bus_template", "iCity/smart_city/traffic_extension.py")
+        manifest = {"objects": []}
+        appended = {"root": object(), "members": [object()]}
+
+        traffic_extension.asset_registry.load_manifest = lambda: manifest
+        traffic_extension.asset_registry.get_object_asset = lambda passed_manifest, asset_id: {
+            "id": asset_id,
+            "path": "assets/vehicles/lowpoly_bus.blend",
+            "collection_name": "Low Poly Retro Van",
+            "object_name": "Low Poly Retro Van",
+        }
+        traffic_extension._append_collection_hierarchy = lambda passed_manifest, asset, collection: appended
+
+        template = traffic_extension._load_bundled_vehicle_template("BUS", object())
+
+        self.assertIs(template, appended)
+
+    def test_generate_vehicles_on_road_paths_falls_back_to_proxy_when_vehicle_asset_missing(self):
+        traffic_extension = load_module("traffic_extension_vehicle_asset_fallback", "iCity/smart_city/traffic_extension.py")
+        settings = types.SimpleNamespace(
+            animation_start=1,
+            animation_end=60,
+            car_count=1,
+            taxi_count=0,
+            bus_count=0,
+            vehicle_scale=0.78,
+            bus_scale=1.18,
+        )
+        created = []
+        traffic_extension.ecology_common.create_follow_path = lambda *args, **kwargs: types.SimpleNamespace(
+            name=args[0],
+            location=Vector((0.0, 0.0, 0.0)),
+            data=types.SimpleNamespace(splines=[types.SimpleNamespace(points=[types.SimpleNamespace(co=Vector((0.0, 0.0, 0.0))), types.SimpleNamespace(co=Vector((5.0, 0.0, 0.0)))])]),
+        )
+        traffic_extension._vehicle_material = lambda vehicle_type: vehicle_type
+        traffic_extension._vehicle_mesh = lambda vehicle_type, scale: ([(0.0, 0.0, 0.0)], [])
+        traffic_extension._load_bundled_vehicle_template = lambda vehicle_type, collection: None
+        traffic_extension._create_collection_vehicle_follower = lambda **kwargs: created.append(("asset", kwargs["name"]))
+        traffic_extension.ecology_common.create_follower = lambda **kwargs: created.append(("proxy", kwargs["name"]))
+
+        traffic_extension._generate_vehicles_on_road_paths(
+            settings,
+            object(),
+            object(),
+            [[Vector((0.0, 0.0, 0.0)), Vector((10.0, 0.0, 0.0))]],
+        )
+
+        self.assertEqual(created, [("proxy", "ICITY_TRAFFIC_CAR_1")])
+
+    def test_generate_vehicles_on_road_paths_falls_back_to_proxy_when_bus_asset_missing(self):
+        traffic_extension = load_module("traffic_extension_bus_asset_fallback", "iCity/smart_city/traffic_extension.py")
+        settings = types.SimpleNamespace(
+            animation_start=1,
+            animation_end=60,
+            car_count=0,
+            taxi_count=0,
+            bus_count=1,
+            vehicle_scale=0.78,
+            bus_scale=1.18,
+        )
+        created = []
+        traffic_extension.ecology_common.create_follow_path = lambda *args, **kwargs: types.SimpleNamespace(
+            name=args[0],
+            location=Vector((0.0, 0.0, 0.0)),
+            data=types.SimpleNamespace(splines=[types.SimpleNamespace(points=[types.SimpleNamespace(co=Vector((0.0, 0.0, 0.0))), types.SimpleNamespace(co=Vector((5.0, 0.0, 0.0)))])]),
+        )
+        traffic_extension._vehicle_material = lambda vehicle_type: vehicle_type
+        traffic_extension._vehicle_mesh = lambda vehicle_type, scale: ([(0.0, 0.0, 0.0)], [])
+        traffic_extension._load_bundled_vehicle_template = lambda vehicle_type, collection: None
+        traffic_extension._create_collection_vehicle_follower = lambda **kwargs: created.append(("asset", kwargs["name"]))
+        traffic_extension.ecology_common.create_follower = lambda **kwargs: created.append(("proxy", kwargs["name"]))
+
+        traffic_extension._generate_vehicles_on_road_paths(
+            settings,
+            object(),
+            object(),
+            [[Vector((0.0, 0.0, 0.0)), Vector((10.0, 0.0, 0.0))]],
+        )
+
+        self.assertEqual(created, [("proxy", "ICITY_TRAFFIC_BUS_1")])
+
+    def test_generate_vehicles_on_road_paths_applies_randomized_assignments(self):
+        traffic_extension = load_module("traffic_extension_vehicle_random_generation", "iCity/smart_city/traffic_extension.py")
+        settings = types.SimpleNamespace(
+            animation_start=1,
+            animation_end=60,
+            car_count=2,
+            taxi_count=0,
+            bus_count=0,
+            vehicle_scale=1.0,
+            bus_scale=1.18,
+            traffic_random_seed=42,
+            traffic_randomness=0.7,
+            vehicle_scale_jitter=0.1,
+        )
+        path_objects = []
+        created = []
+        scales = []
+
+        def create_follow_path(name, *args, **kwargs):
+            path_obj = types.SimpleNamespace(
+                name=name,
+                location=Vector((0.0, 0.0, 0.0)),
+                data=types.SimpleNamespace(
+                    splines=[
+                        types.SimpleNamespace(
+                            points=[
+                                types.SimpleNamespace(co=Vector((0.0, 0.0, 0.0))),
+                                types.SimpleNamespace(co=Vector((5.0, 0.0, 0.0))),
+                            ]
+                        )
+                    ]
+                ),
+            )
+            path_objects.append(path_obj)
+            return path_obj
+
+        traffic_extension.ecology_common.create_follow_path = create_follow_path
+        traffic_extension._vehicle_material = lambda vehicle_type: vehicle_type
+
+        def vehicle_mesh(vehicle_type, scale):
+            scales.append(scale)
+            return ([(scale, 0.0, 0.0)], [])
+
+        traffic_extension._vehicle_mesh = vehicle_mesh
+        traffic_extension._load_bundled_vehicle_template = lambda vehicle_type, collection: None
+        traffic_extension.plan_vehicle_assignments = lambda *args, **kwargs: [
+            {"vehicle_type": "CAR", "route_kind": "passenger", "route_index": 1, "phase_start": 0.37, "scale_factor": 0.93},
+            {"vehicle_type": "CAR", "route_kind": "passenger", "route_index": 0, "phase_start": 0.81, "scale_factor": 1.06},
+        ]
+        traffic_extension.ecology_common.create_follower = lambda **kwargs: created.append(
+            (kwargs["name"], kwargs["path_obj"].name, kwargs["phase_start"])
+        )
+
+        traffic_extension._generate_vehicles_on_road_paths(
+            settings,
+            object(),
+            object(),
+            [[Vector((0.0, 0.0, 0.0)), Vector((10.0, 0.0, 0.0))]],
+        )
+
+        self.assertEqual(
+            created,
+            [
+                ("ICITY_TRAFFIC_CAR_1", path_objects[3].name, 0.37),
+                ("ICITY_TRAFFIC_CAR_2", path_objects[2].name, 0.81),
+            ],
+        )
+        self.assertEqual(scales, [0.93, 1.06])
+
+    def test_generate_vehicles_on_road_paths_creates_forward_and_reverse_routes(self):
+        traffic_extension = load_module("traffic_extension_vehicle_direction_routes", "iCity/smart_city/traffic_extension.py")
+        settings = types.SimpleNamespace(
+            animation_start=1,
+            animation_end=60,
+            car_count=1,
+            taxi_count=0,
+            bus_count=1,
+            vehicle_scale=0.78,
+            bus_scale=1.18,
+        )
+        road_path = [
+            Vector((0.0, 0.0, 0.0)),
+            Vector((10.0, 0.0, 0.0)),
+            Vector((10.0, 10.0, 0.0)),
+        ]
+        created_paths = []
+
+        traffic_extension.prepare_vehicle_path = lambda chain, **kwargs: [point.copy() for point in chain]
+
+        def create_follow_path(name, points, *args, **kwargs):
+            created_paths.append((name, [(point.x, point.y, point.z) for point in points]))
+            return types.SimpleNamespace(
+                name=name,
+                location=Vector((0.0, 0.0, 0.0)),
+                data=types.SimpleNamespace(
+                    splines=[
+                        types.SimpleNamespace(
+                            points=[types.SimpleNamespace(co=point.copy()) for point in points]
+                        )
+                    ]
+                ),
+            )
+
+        traffic_extension.ecology_common.create_follow_path = create_follow_path
+        traffic_extension.plan_vehicle_assignments = lambda *args, **kwargs: []
+
+        traffic_extension._generate_vehicles_on_road_paths(settings, object(), object(), [road_path])
+
+        names = [name for name, _ in created_paths]
+        self.assertIn("ICITY_TRAFFIC_RoadPath_Bus_1_Lane_1", names)
+        self.assertIn("ICITY_TRAFFIC_RoadPath_Bus_1_Lane_2_Reverse", names)
+        self.assertIn("ICITY_TRAFFIC_RoadPath_1_Lane_1", names)
+        self.assertIn("ICITY_TRAFFIC_RoadPath_1_Lane_2_Reverse", names)
+        self.assertNotIn("ICITY_TRAFFIC_RoadPath_1_Lane_1_Reverse", names)
+        self.assertNotIn("ICITY_TRAFFIC_RoadPath_1_Lane_2", names)
+
+        bus_forward = dict(created_paths)["ICITY_TRAFFIC_RoadPath_Bus_1_Lane_1"]
+        bus_reverse = dict(created_paths)["ICITY_TRAFFIC_RoadPath_Bus_1_Lane_2_Reverse"]
+        lane_forward = dict(created_paths)["ICITY_TRAFFIC_RoadPath_1_Lane_1"]
+        lane_reverse = dict(created_paths)["ICITY_TRAFFIC_RoadPath_1_Lane_2_Reverse"]
+        self.assertEqual(bus_forward[0], (0.0, 0.0, 0.0))
+        self.assertEqual(bus_reverse[0], (10.0, 10.0, 0.0))
+        self.assertEqual(lane_forward[0], (0.0, 0.0, 0.0))
+        self.assertEqual(lane_reverse[0], (10.0, 10.0, 0.0))
+
+    def test_bundled_vehicle_profile_uses_bus_specific_metadata_when_available(self):
+        traffic_extension = load_module("traffic_extension_bus_vehicle_profile", "iCity/smart_city/traffic_extension.py")
+        traffic_extension._manifest_object_asset = lambda asset_id: {
+            "rotation_z_correction": 1.0471975512,
+            "scale_ratio": 0.88,
+            "ground_offset": 0.06,
+            "lane_offset": 0.1,
+            "sample_spacing": 0.9,
+            "smoothing_iterations": 4,
+            "corner_rounding_radius": 2.6,
+            "corner_rounding_segments": 9,
+            "corner_max_angle_deg": 140.0,
+        }
+
+        profile = traffic_extension.bundled_vehicle_profile("BUS")
+
+        self.assertAlmostEqual(profile["rotation_z_correction"], 1.0471975512)
+        self.assertAlmostEqual(profile["scale_ratio"], 0.88)
+        self.assertAlmostEqual(profile["ground_offset"], 0.06)
+        self.assertAlmostEqual(profile["lane_offset"], 0.1)
+        self.assertAlmostEqual(profile["sample_spacing"], 0.9)
+        self.assertEqual(profile["smoothing_iterations"], 4)
+        self.assertAlmostEqual(profile["corner_rounding_radius"], 2.6)
+        self.assertEqual(profile["corner_rounding_segments"], 9)
+        self.assertAlmostEqual(profile["corner_max_angle_deg"], 140.0)
+
+    def test_bundled_vehicle_profile_uses_forward_axis_ground_and_lane_metadata(self):
+        traffic_extension = load_module("traffic_extension_vehicle_profile", "iCity/smart_city/traffic_extension.py")
+        traffic_extension._manifest_object_asset = lambda asset_id: {
+            "rotation_z_correction": 1.5707963267948966,
+            "scale_ratio": 0.54,
+            "ground_offset": 0.035,
+            "lane_offset": 0.6,
+            "corner_rounding_radius": 1.4,
+            "corner_rounding_segments": 5,
+            "corner_max_angle_deg": 135.0,
+        }
+
+        profile = traffic_extension.bundled_vehicle_profile("CAR")
+
+        self.assertAlmostEqual(profile["rotation_z_correction"], 1.5707963267948966)
+        self.assertAlmostEqual(profile["scale_ratio"], 0.54)
+        self.assertAlmostEqual(profile["ground_offset"], 0.035)
+        self.assertAlmostEqual(profile["lane_offset"], 0.6)
+        self.assertAlmostEqual(profile["corner_rounding_radius"], 1.4)
+        self.assertEqual(profile["corner_rounding_segments"], 5)
+        self.assertAlmostEqual(profile["corner_max_angle_deg"], 135.0)
+
+    def test_prepare_vehicle_path_smooths_corner_and_preserves_endpoints(self):
+        traffic_extension = load_module("traffic_extension_vehicle_path_prepare", "iCity/smart_city/traffic_extension.py")
+        chain = [
+            Vector((0.0, 0.0, 0.0)),
+            Vector((8.0, 0.0, 0.0)),
+            Vector((8.0, 8.0, 0.0)),
+        ]
+
+        prepared = traffic_extension.prepare_vehicle_path(
+            chain,
+            lane_offset=0.0,
+            sample_spacing=1.0,
+            smoothing_iterations=2,
+            corner_rounding_radius=1.4,
+            corner_rounding_segments=5,
+            corner_max_angle_deg=135.0,
+        )
+
+        self.assertGreater(len(prepared), len(chain))
+        self.assertEqual((prepared[0].x, prepared[0].y, prepared[0].z), (0.0, 0.0, 0.0))
+        self.assertEqual((prepared[-1].x, prepared[-1].y, prepared[-1].z), (8.0, 8.0, 0.0))
+        self.assertTrue(any(0.0 < point.x < 8.0 and 0.0 < point.y < 8.0 for point in prepared))
+        self.assertFalse(any(point.x == 8.0 and point.y == 0.0 for point in prepared[1:-1]))
+
+    def test_bundled_vehicle_profile_uses_smoother_turn_defaults_from_manifest(self):
+        traffic_extension = load_module("traffic_extension_vehicle_turn_defaults", "iCity/smart_city/traffic_extension.py")
+
+        profile = traffic_extension.bundled_vehicle_profile("CAR")
+
+        self.assertAlmostEqual(profile["sample_spacing"], 0.75)
+        self.assertEqual(profile["smoothing_iterations"], 3)
+        self.assertAlmostEqual(profile["corner_rounding_radius"], 2.0)
+        self.assertEqual(profile["corner_rounding_segments"], 7)
+        self.assertAlmostEqual(profile["corner_max_angle_deg"], 135.0)
+
     def test_clear_streetlights_only_removes_generated_collection(self):
         asset_extension = load_module("asset_extension_clear_streetlights", "iCity/smart_city/asset_extension.py")
         calls = []
@@ -1541,9 +1896,12 @@ class SmartCityExtensionTests(unittest.TestCase):
 
         self.assertIn("roadside_asset", categories)
         self.assertIn("ecology_asset", categories)
+        self.assertIn("traffic_vehicle", categories)
         self.assertIn("dock_pier_proc_01", object_ids)
         self.assertIn("tree_cluster_proc_01", object_ids)
         self.assertIn("shrub_patch_proc_01", object_ids)
+        self.assertIn("vehicle_chevrolet_m1009_01", object_ids)
+        self.assertIn("vehicle_lowpoly_bus_01", object_ids)
 
 
 if __name__ == "__main__":
