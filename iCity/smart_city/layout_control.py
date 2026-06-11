@@ -19,11 +19,13 @@ from bpy.types import Operator, Panel, PropertyGroup, UIList
 ICITY_BASE_OBJECT = "ICity Base"
 LAYOUT_CONTRACT_TEXT = "ICity Layout Contract Report"
 LAYOUT_GRAPH_TEXT = "ICity Layout Graph Export"
+LAYOUT_DIAGNOSTIC_TEXT = "ICity Layout Diagnostic Log"
 LAYOUT_PREVIEW_COLLECTION = "ICity Layout Draft Preview"
 LAYOUT_PREVIEW_NODES = "ICity Layout Preview Nodes"
 LAYOUT_PREVIEW_ROADS = "ICity Layout Preview Roads"
 LAYOUT_PREVIEW_DISABLED_ROADS = "ICity Layout Preview Disabled Roads"
 LAYOUT_PREVIEW_BLOCKS = "ICity Layout Preview Blocks"
+LAYOUT_BACKUP_PREFIX = "ICity Base Layout Backup"
 
 # The complete contract report can be large and is only needed while Blender
 # is running. Keeping the last read-only report in module memory avoids
@@ -258,6 +260,74 @@ def format_layout_graph_export(graph: dict) -> str:
     return json.dumps(graph, ensure_ascii=False, indent=2)
 
 
+def parse_layout_graph_json_text(content: str) -> dict:
+    """Parse structured JSON input into the shared editable LayoutGraph shape.
+
+    JSON import is intentionally strict. Invalid input must not partially
+    replace the current draft or silently invent missing node references.
+    """
+
+    def reject_non_finite(value):
+        raise ValueError(f"Non-finite JSON number is not supported: {value}")
+
+    try:
+        raw = json.loads(content, parse_constant=reject_non_finite)
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"Invalid JSON at line {exc.lineno}, column {exc.colno}: {exc.msg}") from exc
+    if not isinstance(raw, dict):
+        raise ValueError("Layout JSON root must be an object.")
+    if not isinstance(raw.get("nodes"), list) or not isinstance(raw.get("edges"), list):
+        raise ValueError("Layout JSON must contain node and edge arrays.")
+
+    nodes = []
+    for index, raw_node in enumerate(raw["nodes"]):
+        if not isinstance(raw_node, dict):
+            raise ValueError(f"Node at index {index} must be an object.")
+        try:
+            node = {
+                "id": str(raw_node.get("id", "")),
+                "source_index": int(raw_node.get("source_index", -1)),
+                "x": float(raw_node.get("x", 0.0)),
+                "y": float(raw_node.get("y", 0.0)),
+                "z": float(raw_node.get("z", 0.0)),
+            }
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"Node at index {index} has invalid coordinates or source index.") from exc
+        if not all(math.isfinite(node[axis]) for axis in ("x", "y", "z")):
+            raise ValueError(f"Node {node['id'] or index} contains non-finite coordinates.")
+        nodes.append(node)
+
+    edges = []
+    for index, raw_edge in enumerate(raw["edges"]):
+        if not isinstance(raw_edge, dict):
+            raise ValueError(f"Edge at index {index} must be an object.")
+        try:
+            source_index = int(raw_edge.get("source_index", -1))
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"Edge at index {index} has an invalid source index.") from exc
+        edges.append(
+            {
+                "id": str(raw_edge.get("id", "")),
+                "source_index": source_index,
+                "start": str(raw_edge.get("start", "")),
+                "end": str(raw_edge.get("end", "")),
+                "enabled_as_road": bool(raw_edge.get("enabled_as_road", True)),
+            }
+        )
+
+    graph = {
+        "version": int(raw.get("version", 1)),
+        "source": str(raw.get("source", "Imported JSON")),
+        "nodes": nodes,
+        "edges": edges,
+        "faces": raw.get("faces", []) if isinstance(raw.get("faces", []), list) else [],
+    }
+    validation = validate_layout_graph(graph)
+    if validation["errors"]:
+        raise ValueError("Layout JSON validation failed: " + "; ".join(validation["errors"]))
+    return graph
+
+
 def validate_layout_graph(graph: dict) -> dict:
     """Run lightweight draft validation before any topology normalization.
 
@@ -355,6 +425,31 @@ def _segment_intersection_2d(start_a: dict, end_a: dict, start_b: dict, end_b: d
     return parameter_a, parameter_b, x, y, (z_a + z_b) / 2.0
 
 
+def _node_on_segment_parameter_2d(node: dict, start: dict, end: dict, tolerance: float):
+    """Return the interior segment parameter when a node lies on an XY edge."""
+
+    start_x = float(start.get("x", 0.0))
+    start_y = float(start.get("y", 0.0))
+    delta_x = float(end.get("x", 0.0)) - start_x
+    delta_y = float(end.get("y", 0.0)) - start_y
+    length_squared = delta_x * delta_x + delta_y * delta_y
+    if length_squared <= tolerance * tolerance:
+        return None
+    parameter = (
+        (float(node.get("x", 0.0)) - start_x) * delta_x
+        + (float(node.get("y", 0.0)) - start_y) * delta_y
+    ) / length_squared
+    if not tolerance < parameter < 1.0 - tolerance:
+        return None
+    nearest_x = start_x + parameter * delta_x
+    nearest_y = start_y + parameter * delta_y
+    distance = math.sqrt(
+        (float(node.get("x", 0.0)) - nearest_x) ** 2
+        + (float(node.get("y", 0.0)) - nearest_y) ** 2
+    )
+    return parameter if distance <= tolerance else None
+
+
 def normalize_layout_graph(
     graph: dict,
     *,
@@ -366,6 +461,7 @@ def normalize_layout_graph(
 
     The operation is deterministic and conservative:
     - nearby nodes merge into the first matching node;
+    - existing nodes lying inside an edge split that edge;
     - proper interior XY crossings become shared nodes;
     - missing, self-loop, duplicate, and too-short edges are removed;
     - the first surviving edge keeps its original road attributes.
@@ -376,6 +472,7 @@ def normalize_layout_graph(
     minimum_edge_length = max(float(minimum_edge_length), 0.0)
     stats = {
         "merged_nodes": 0,
+        "point_on_edge_splits": 0,
         "intersection_nodes": 0,
         "removed_invalid_edges": 0,
         "removed_short_edges": 0,
@@ -437,6 +534,23 @@ def normalize_layout_graph(
     # split edge from changing the pair iteration while intersections are read.
     split_points = {index: [] for index in range(len(edges))}
     existing_node_ids = {node["id"] for node in nodes}
+    for edge_index, edge in enumerate(edges):
+        start = node_by_id[edge["start"]]
+        end = node_by_id[edge["end"]]
+        for node in nodes:
+            if node["id"] in {edge["start"], edge["end"]}:
+                continue
+            parameter = _node_on_segment_parameter_2d(
+                node,
+                start,
+                end,
+                intersection_tolerance,
+            )
+            if parameter is None:
+                continue
+            split_points[edge_index].append((parameter, node["id"]))
+            stats["point_on_edge_splits"] += 1
+
     for first_index, first_edge in enumerate(edges):
         for second_index in range(first_index + 1, len(edges)):
             second_edge = edges[second_index]
@@ -481,6 +595,12 @@ def normalize_layout_graph(
     for edge_index, edge in enumerate(edges):
         points = [(0.0, edge["start"]), *split_points[edge_index], (1.0, edge["end"])]
         points.sort(key=lambda item: item[0])
+        unique_points = []
+        for parameter, node_id in points:
+            if unique_points and node_id == unique_points[-1][1]:
+                continue
+            unique_points.append((parameter, node_id))
+        points = unique_points
         if split_points[edge_index]:
             stats["split_edges"] += 1
         for segment_index, ((_, start), (_, end)) in enumerate(zip(points, points[1:])):
@@ -528,7 +648,8 @@ def format_normalization_summary(stats: dict) -> str:
     """Create a compact user-facing summary of a normalization pass."""
 
     return (
-        f"Merged {stats['merged_nodes']} nodes; added {stats['intersection_nodes']} intersections; "
+        f"Merged {stats['merged_nodes']} nodes; connected {stats.get('point_on_edge_splits', 0)} nodes on edges; "
+        f"added {stats['intersection_nodes']} intersections; "
         f"split {stats['split_edges']} edges; removed "
         f"{stats['removed_invalid_edges'] + stats['removed_short_edges'] + stats['removed_duplicate_edges']} edges"
     )
@@ -829,6 +950,711 @@ def build_layout_graph_from_draft(scene) -> dict:
     return graph
 
 
+def build_layout_mesh_payload(graph: dict) -> dict:
+    """Convert a validated LayoutGraph into deterministic Mesh API payloads."""
+
+    node_indices = {}
+    vertices = []
+    node_sources = []
+    for node in graph.get("nodes", []):
+        node_id = str(node.get("id", ""))
+        if not node_id or node_id in node_indices:
+            continue
+        node_indices[node_id] = len(vertices)
+        vertices.append(
+            (
+                float(node.get("x", 0.0)),
+                float(node.get("y", 0.0)),
+                float(node.get("z", 0.0)),
+            )
+        )
+        node_sources.append(int(node.get("source_index", -1)))
+
+    edges = []
+    edge_sources = []
+    edge_road_enabled = []
+    for edge in graph.get("edges", []):
+        start = node_indices.get(str(edge.get("start", "")))
+        end = node_indices.get(str(edge.get("end", "")))
+        if start is None or end is None or start == end:
+            continue
+        edges.append((start, end))
+        edge_sources.append(int(edge.get("source_index", -1)))
+        edge_road_enabled.append(bool(edge.get("enabled_as_road", True)))
+
+    faces = []
+    face_sources = []
+    for face in graph.get("faces", []):
+        indices = [node_indices.get(str(node_id)) for node_id in face.get("vertices", [])]
+        if len(indices) < 3 or any(index is None for index in indices) or len(set(indices)) < 3:
+            continue
+        faces.append(tuple(indices))
+        face_sources.append(int(face.get("source_index", -1)))
+
+    return {
+        "vertices": vertices,
+        "edges": edges,
+        "faces": faces,
+        "node_sources": node_sources,
+        "edge_sources": edge_sources,
+        "face_sources": face_sources,
+        "edge_road_enabled": edge_road_enabled,
+    }
+
+
+def orient_face_loop_up(vertices: list[tuple[float, float, float]], face: tuple[int, ...]) -> tuple[int, ...]:
+    """Return a planar face loop whose XY winding produces an upward normal."""
+
+    signed_area_twice = 0.0
+    for index, vertex_index in enumerate(face):
+        next_vertex_index = face[(index + 1) % len(face)]
+        x, y, _ = vertices[vertex_index]
+        next_x, next_y, _ = vertices[next_vertex_index]
+        signed_area_twice += x * next_y - next_x * y
+    return face if signed_area_twice >= 0.0 else tuple(reversed(face))
+
+
+def build_layout_apply_payload(graph: dict) -> dict:
+    """Build the complete point, road-edge, and inferred-block Apply payload."""
+
+    payload = build_layout_mesh_payload(graph)
+    enabled_edge_keys = {
+        frozenset(edge)
+        for edge, enabled in zip(payload["edges"], payload["edge_road_enabled"])
+        if enabled
+    }
+    faces = []
+    face_sources = []
+    for face, source_index in zip(payload["faces"], payload["face_sources"]):
+        boundary_keys = {
+            frozenset((face[index], face[(index + 1) % len(face)]))
+            for index in range(len(face))
+        }
+        # Never let BMesh invent extra non-road boundary edges for a stale or
+        # malformed explicit face. Only enabled road loops become city blocks.
+        if not boundary_keys.issubset(enabled_edge_keys):
+            continue
+        faces.append(orient_face_loop_up(payload["vertices"], face))
+        face_sources.append(source_index)
+    payload["faces"] = faces
+    payload["face_sources"] = face_sources
+    return payload
+
+
+def _unique_mesh_name(base_name: str) -> str:
+    if bpy.data.meshes.get(base_name) is None:
+        return base_name
+    suffix = 1
+    while bpy.data.meshes.get(f"{base_name}.{suffix:03d}") is not None:
+        suffix += 1
+    return f"{base_name}.{suffix:03d}"
+
+
+def _set_attribute_item_value(data_item, value) -> bool:
+    """Assign one plain value to a Blender mesh-attribute data item."""
+
+    for field_name in ("value", "value_bool", "value_int", "value_float"):
+        if hasattr(data_item, field_name):
+            try:
+                setattr(data_item, field_name, value)
+                return True
+            except (TypeError, ValueError):
+                continue
+    for field_name in ("vector", "color"):
+        if hasattr(data_item, field_name):
+            try:
+                setattr(data_item, field_name, value)
+                return True
+            except (TypeError, ValueError):
+                continue
+    return False
+
+
+def copy_mesh_attribute_schema_and_values(source_mesh, target_mesh, payload: dict) -> dict:
+    """Copy ICity attribute definitions and conservative values to a new mesh.
+
+    Existing source-index mappings preserve known values. New elements inherit
+    the first available value in the matching domain. ``Road del`` is derived
+    from each draft edge's enabled state, and newly inferred faces explicitly
+    become Procedural city blocks.
+    """
+
+    domain_sources = {
+        "POINT": payload["node_sources"],
+        "EDGE": payload["edge_sources"],
+        "FACE": payload["face_sources"],
+        # There is no stable source-loop mapping after rebuilding topology.
+        # Still recreate CORNER attributes and initialize them from a template
+        # value so a named attribute expected by Geometry Nodes is not absent.
+        "CORNER": None,
+    }
+    stats = {"copied_attributes": 0, "skipped_attributes": 0}
+    for source_attribute in getattr(source_mesh, "attributes", []):
+        name = getattr(source_attribute, "name", "")
+        domain = getattr(source_attribute, "domain", "")
+        data_type = getattr(source_attribute, "data_type", "")
+        # ``position`` is Blender's built-in vertex-coordinate attribute.
+        # ``from_pydata`` already created the correct new positions; copying
+        # old values here would silently restore the previous city layout.
+        if domain not in domain_sources or not name or name == "position":
+            stats["skipped_attributes"] += 1
+            continue
+        target_attribute = getattr(target_mesh, "attributes", {}).get(name)
+        if target_attribute is None:
+            try:
+                target_attribute = target_mesh.attributes.new(
+                    name=name,
+                    type=data_type,
+                    domain=domain,
+                )
+            except (RuntimeError, TypeError, ValueError):
+                stats["skipped_attributes"] += 1
+                continue
+
+        source_data = list(getattr(source_attribute, "data", []))
+        fallback_value = _attribute_value(source_data[0]) if source_data else None
+        source_indices = domain_sources[domain]
+        for index, target_item in enumerate(getattr(target_attribute, "data", [])):
+            if name == "Road del" and domain == "EDGE":
+                value = not payload["edge_road_enabled"][index]
+            else:
+                source_index = (
+                    source_indices[index]
+                    if source_indices is not None and index < len(source_indices)
+                    else -1
+                )
+                value = (
+                    _attribute_value(source_data[source_index])
+                    if 0 <= source_index < len(source_data)
+                    else fallback_value
+                )
+                # The original ICity operator encodes Procedural as integer 0.
+                # A newly detected closed block has no source face to inherit,
+                # so explicitly make it a normal procedural city block.
+                if name == "space type" and domain == "FACE" and source_index < 0:
+                    value = 0
+            if value is not None:
+                _set_attribute_item_value(target_item, value)
+        stats["copied_attributes"] += 1
+    return stats
+
+
+def snapshot_mesh_attributes(mesh) -> list[dict]:
+    """Capture Mesh attribute schemas and values before in-place topology work."""
+
+    snapshots = []
+    for attribute in getattr(mesh, "attributes", []):
+        name = getattr(attribute, "name", "")
+        domain = getattr(attribute, "domain", "")
+        data_type = getattr(attribute, "data_type", "")
+        if not name or name == "position" or domain not in {"POINT", "EDGE", "FACE", "CORNER"}:
+            continue
+        snapshots.append(
+            {
+                "name": name,
+                "domain": domain,
+                "data_type": data_type,
+                "values": [_attribute_value(item) for item in getattr(attribute, "data", [])],
+            }
+        )
+    return snapshots
+
+
+def restore_mesh_attributes_from_snapshot(mesh, payload: dict, snapshots: list[dict]) -> dict:
+    """Restore ICity attributes after rebuilding geometry in the same Mesh.
+
+    Source-index mappings preserve attributes for traceable nodes and edges.
+    New elements use the first old value as an ICity-compatible template.
+    """
+
+    domain_sources = {
+        "POINT": payload["node_sources"],
+        "EDGE": payload["edge_sources"],
+        "FACE": payload["face_sources"],
+        "CORNER": None,
+    }
+    stats = {"restored_attributes": 0, "skipped_attributes": 0}
+    for snapshot in snapshots:
+        name = snapshot["name"]
+        domain = snapshot["domain"]
+        data_type = snapshot["data_type"]
+        values = snapshot["values"]
+        attribute = mesh.attributes.get(name)
+        if attribute is not None and (
+            getattr(attribute, "domain", "") != domain
+            or getattr(attribute, "data_type", "") != data_type
+        ):
+            try:
+                mesh.attributes.remove(attribute)
+            except RuntimeError:
+                stats["skipped_attributes"] += 1
+                continue
+            attribute = None
+        if attribute is None:
+            try:
+                attribute = mesh.attributes.new(name=name, type=data_type, domain=domain)
+            except (RuntimeError, TypeError, ValueError):
+                stats["skipped_attributes"] += 1
+                continue
+
+        fallback_value = values[0] if values else None
+        source_indices = domain_sources[domain]
+        for index, target_item in enumerate(getattr(attribute, "data", [])):
+            if name == "Road del" and domain == "EDGE":
+                value = not payload["edge_road_enabled"][index]
+            else:
+                source_index = (
+                    source_indices[index]
+                    if source_indices is not None and index < len(source_indices)
+                    else -1
+                )
+                value = values[source_index] if 0 <= source_index < len(values) else fallback_value
+                if name == "space type" and domain == "FACE" and source_index < 0:
+                    value = 0
+            if value is not None:
+                _set_attribute_item_value(target_item, value)
+        stats["restored_attributes"] += 1
+    return stats
+
+
+def rebuild_icity_base_mesh_in_place(base_object, graph: dict) -> tuple[dict, dict, str]:
+    """Rebuild topology inside the existing ICity Base Mesh datablock.
+
+    This deliberately never assigns ``base_object.data``. The bundled ICity
+    Geometry Nodes graph keeps references to that Mesh datablock, and replacing
+    it caused reproducible Blender 4.1 native crashes.
+    """
+
+    import bmesh
+
+    payload = build_layout_mesh_payload(graph)
+    if not payload["vertices"] or not payload["edges"]:
+        raise RuntimeError("Draft must contain at least one valid road edge.")
+
+    mesh = base_object.data
+    attribute_snapshots = snapshot_mesh_attributes(mesh)
+    backup_mesh = mesh.copy()
+    backup_mesh.name = _unique_mesh_name(LAYOUT_BACKUP_PREFIX)
+
+    bm = bmesh.new()
+    try:
+        vertices = [bm.verts.new(coordinate) for coordinate in payload["vertices"]]
+        for start, end in payload["edges"]:
+            bm.edges.new((vertices[start], vertices[end]))
+        for face in payload["faces"]:
+            bm.faces.new([vertices[index] for index in face])
+        bm.normal_update()
+        bm.to_mesh(mesh)
+    finally:
+        bm.free()
+
+    actual_counts = (
+        len(getattr(mesh, "vertices", [])),
+        len(getattr(mesh, "edges", [])),
+        len(getattr(mesh, "polygons", [])),
+    )
+    expected_counts = (
+        len(payload["vertices"]),
+        len(payload["edges"]),
+        len(payload["faces"]),
+    )
+    if actual_counts != expected_counts:
+        raise RuntimeError(
+            "BMesh produced unexpected topology: "
+            f"expected {expected_counts}, got {actual_counts}. "
+            f"Original mesh backup: {backup_mesh.name}"
+        )
+
+    attribute_stats = restore_mesh_attributes_from_snapshot(mesh, payload, attribute_snapshots)
+    mesh.update()
+    base_object.update_tag(refresh={"DATA"})
+    return payload, attribute_stats, backup_mesh.name
+
+
+def selected_incremental_road_spec(graph: dict, edge_index: int) -> dict:
+    """Return the minimal information needed to append one draft road.
+
+    The experimental native-edit operator deliberately handles one selected
+    road at a time. Keeping this lookup independent from Blender makes the
+    safety boundary easy to test: no normalization, deletion, movement, face
+    rebuilding, or whole-Mesh replacement is hidden inside the operation.
+    """
+
+    edges = list(graph.get("edges", []))
+    if edge_index < 0 or edge_index >= len(edges):
+        raise IndexError("No valid draft road is selected.")
+    edge = edges[edge_index]
+    nodes = {str(node.get("id", "")): node for node in graph.get("nodes", [])}
+    start_id = str(edge.get("start", ""))
+    end_id = str(edge.get("end", ""))
+    if start_id not in nodes or end_id not in nodes:
+        raise ValueError("The selected draft road references a missing node.")
+    if start_id == end_id:
+        raise ValueError("The selected draft road is a self-loop.")
+    return {
+        "edge_id": str(edge.get("id", "")),
+        "enabled_as_road": bool(edge.get("enabled_as_road", True)),
+        "start": nodes[start_id],
+        "end": nodes[end_id],
+    }
+
+
+def _find_or_create_edit_vertex(bm, node: dict, original_vertex_count: int, tolerance: float = 0.0001):
+    """Resolve a source vertex or append a new one inside the live Edit BMesh."""
+
+    source_index = int(node.get("source_index", -1))
+    if 0 <= source_index < original_vertex_count:
+        return bm.verts[source_index], False
+
+    coordinate = (
+        float(node.get("x", 0.0)),
+        float(node.get("y", 0.0)),
+        float(node.get("z", 0.0)),
+    )
+    tolerance_squared = tolerance * tolerance
+    for vertex in bm.verts:
+        distance_squared = sum(
+            (float(vertex.co[axis]) - coordinate[axis]) ** 2
+            for axis in range(3)
+        )
+        if distance_squared <= tolerance_squared:
+            return vertex, False
+    return bm.verts.new(coordinate), True
+
+
+def append_selected_draft_road_via_edit_mode(context) -> dict:
+    """Append one selected draft road using ICity's native Edit Mode contract.
+
+    Unlike the rejected full-rebuild paths, this keeps all existing topology
+    and custom-data layers alive. Blender extends those layers when BMesh adds
+    vertices or an edge, then the same ``mesh.attribute_set`` operator used by
+    ICity's Assign Road button writes the selected edge's ``Road del`` value.
+    """
+
+    import bmesh
+
+    base_object = bpy.data.objects.get(ICITY_BASE_OBJECT)
+    if base_object is None or getattr(base_object, "data", None) is None:
+        raise RuntimeError("ICity Base was not found. Run iCity Start first.")
+    mesh = base_object.data
+    road_attribute = mesh.attributes.get("Road del")
+    if road_attribute is None or getattr(road_attribute, "domain", "") != "EDGE":
+        raise RuntimeError("ICity Base is missing the required EDGE attribute 'Road del'.")
+
+    graph = build_layout_graph_from_draft(context.scene)
+    spec = selected_incremental_road_spec(graph, context.scene.icity_layout_edge_index)
+    original_vertex_count = len(mesh.vertices)
+    original_edge_count = len(mesh.edges)
+
+    # Match ICity's own edit workflow: make Base active, enter Edit Mode, mutate
+    # the existing edit BMesh, set the selected edge attribute, then leave Edit
+    # Mode so Geometry Nodes sees one coherent edit-mode update.
+    if context.mode != "OBJECT":
+        bpy.ops.object.mode_set(mode="OBJECT")
+    bpy.ops.object.select_all(action="DESELECT")
+    base_object.select_set(True)
+    context.view_layer.objects.active = base_object
+    bpy.ops.object.mode_set(mode="EDIT")
+
+    bm = bmesh.from_edit_mesh(mesh)
+    bm.verts.ensure_lookup_table()
+    for vertex in bm.verts:
+        vertex.select = False
+    for edge in bm.edges:
+        edge.select = False
+    for face in bm.faces:
+        face.select = False
+
+    start_vertex, start_created = _find_or_create_edit_vertex(bm, spec["start"], original_vertex_count)
+    end_vertex, end_created = _find_or_create_edit_vertex(bm, spec["end"], original_vertex_count)
+    if start_vertex == end_vertex:
+        raise RuntimeError("The selected draft road resolves to one ICity Base vertex.")
+
+    target_edge = bm.edges.get((start_vertex, end_vertex))
+    edge_created = target_edge is None
+    if target_edge is None:
+        target_edge = bm.edges.new((start_vertex, end_vertex))
+    target_edge.select = True
+    bm.select_mode = {"EDGE"}
+    bm.select_flush_mode()
+    bmesh.update_edit_mesh(mesh, loop_triangles=False, destructive=True)
+
+    # ICity's Assign Road and Remove Road operators both set the active
+    # attribute and call bpy.ops.mesh.attribute_set while the edge is selected.
+    attribute_names = [attribute.name for attribute in mesh.attributes]
+    mesh.attributes.active_index = attribute_names.index("Road del")
+    bpy.ops.mesh.attribute_set(value_bool=not spec["enabled_as_road"])
+    bmesh.update_edit_mesh(mesh, loop_triangles=False, destructive=False)
+    bpy.ops.object.mode_set(mode="OBJECT")
+
+    return {
+        "edge_id": spec["edge_id"],
+        "created_vertices": int(start_created) + int(end_created),
+        "created_edge": edge_created,
+        "vertex_count": len(mesh.vertices),
+        "edge_count": len(mesh.edges),
+        "original_vertex_count": original_vertex_count,
+        "original_edge_count": original_edge_count,
+    }
+
+
+def replace_icity_base_roads_via_edit_mode(context, graph: dict) -> dict:
+    """Replace ICity Base layout through the native Edit Mode contract.
+
+    Draft road loops become real Blender faces. The same native attribute
+    operator used by ICity marks those faces as Procedural city blocks.
+    """
+
+    import bmesh
+
+    base_object = bpy.data.objects.get(ICITY_BASE_OBJECT)
+    if base_object is None or getattr(base_object, "data", None) is None:
+        raise RuntimeError("ICity Base was not found. Run iCity Start first.")
+    mesh = base_object.data
+    road_attribute = mesh.attributes.get("Road del")
+    if (
+        road_attribute is None
+        or getattr(road_attribute, "domain", "") != "EDGE"
+        or getattr(road_attribute, "data_type", "") != "BOOLEAN"
+    ):
+        raise RuntimeError("ICity Base requires the BOOLEAN EDGE attribute 'Road del'.")
+    space_type_attribute = mesh.attributes.get("space type")
+    if (
+        space_type_attribute is None
+        or getattr(space_type_attribute, "domain", "") != "FACE"
+        or getattr(space_type_attribute, "data_type", "") != "INT"
+    ):
+        raise RuntimeError("ICity Base requires the INT FACE attribute 'space type'.")
+
+    payload = build_layout_apply_payload(graph)
+    if not payload["vertices"] or not payload["edges"]:
+        raise RuntimeError("Draft must contain at least one valid road edge.")
+
+    original_counts = (len(mesh.vertices), len(mesh.edges), len(mesh.polygons))
+    reset_layout_diagnostic_log(
+        [
+            "Apply mode: replace ICity Base layout through Edit BMesh",
+            f"Before: {original_counts[0]} nodes, {original_counts[1]} edges, {original_counts[2]} faces",
+            (
+                f"Draft: {len(payload['vertices'])} nodes, "
+                f"{len(payload['edges'])} edges, {len(payload['faces'])} faces"
+            ),
+            (
+                "Road del: BOOLEAN/EDGE Mesh attribute; "
+                "assigned through Blender mesh.attribute_set"
+            ),
+            (
+                "space type: INT/FACE Mesh attribute; "
+                "new faces are assigned Procedural (0)"
+            ),
+        ]
+    )
+
+    if context.mode != "OBJECT":
+        bpy.ops.object.mode_set(mode="OBJECT")
+    bpy.ops.object.select_all(action="DESELECT")
+    base_object.select_set(True)
+    context.view_layer.objects.active = base_object
+    bpy.ops.object.mode_set(mode="EDIT")
+    append_layout_diagnostic_log("Entered ICity Base Edit Mode")
+
+    bm = bmesh.from_edit_mesh(mesh)
+    existing_geometry = list(bm.verts)
+    if existing_geometry:
+        bmesh.ops.delete(bm, geom=existing_geometry, context="VERTS")
+    append_layout_diagnostic_log("Removed previous Base topology inside Edit BMesh")
+
+    vertices = [bm.verts.new(coordinate) for coordinate in payload["vertices"]]
+    created_edges = [
+        bm.edges.new((vertices[start], vertices[end]))
+        for start, end in payload["edges"]
+    ]
+    created_faces = [
+        bm.faces.new([vertices[vertex_index] for vertex_index in face])
+        for face in payload["faces"]
+    ]
+    append_layout_diagnostic_log(
+        (
+            f"Created {len(vertices)} nodes, {len(created_edges)} edges, "
+            f"and {len(created_faces)} faces"
+        )
+    )
+
+    # Submit the topology once before using Blender's native attribute operator.
+    # The successful one-edge experiment established that BOOLEAN attributes
+    # such as Road del are reliably writable through mesh.attribute_set even
+    # though Blender 4.1 does not expose them as a BMesh custom-data layer.
+    bmesh.update_edit_mesh(mesh, loop_triangles=False, destructive=True)
+    append_layout_diagnostic_log("Submitted the complete point/edge/face topology")
+
+    attribute_names = [attribute.name for attribute in mesh.attributes]
+    mesh.attributes.active_index = attribute_names.index("Road del")
+    for edge in bm.edges:
+        edge.select = False
+    for face in bm.faces:
+        face.select = False
+    bm.select_mode = {"EDGE"}
+
+    enabled_edges = [
+        edge
+        for edge, enabled in zip(created_edges, payload["edge_road_enabled"])
+        if enabled
+    ]
+    disabled_edges = [
+        edge
+        for edge, enabled in zip(created_edges, payload["edge_road_enabled"])
+        if not enabled
+    ]
+    if enabled_edges:
+        for edge in enabled_edges:
+            edge.select = True
+        bm.select_flush_mode()
+        bmesh.update_edit_mesh(mesh, loop_triangles=False, destructive=False)
+        bpy.ops.mesh.attribute_set(value_bool=False)
+        append_layout_diagnostic_log(f"Assigned Road del=False to {len(enabled_edges)} enabled roads")
+        for edge in enabled_edges:
+            edge.select = False
+    if disabled_edges:
+        for edge in disabled_edges:
+            edge.select = True
+        bm.select_flush_mode()
+        bmesh.update_edit_mesh(mesh, loop_triangles=False, destructive=False)
+        bpy.ops.mesh.attribute_set(value_bool=True)
+        append_layout_diagnostic_log(f"Assigned Road del=True to {len(disabled_edges)} disabled roads")
+
+    if created_faces:
+        for edge in bm.edges:
+            edge.select = False
+        for face in bm.faces:
+            face.select = False
+        for face in created_faces:
+            face.select = True
+        bm.select_mode = {"FACE"}
+        bm.select_flush_mode()
+        bmesh.update_edit_mesh(mesh, loop_triangles=False, destructive=False)
+        attribute_names = [attribute.name for attribute in mesh.attributes]
+        mesh.attributes.active_index = attribute_names.index("space type")
+        bpy.ops.mesh.attribute_set(value_int=0)
+        append_layout_diagnostic_log(
+            f"Assigned space type=Procedural to {len(created_faces)} faces"
+        )
+
+    bmesh.update_edit_mesh(mesh, loop_triangles=False, destructive=False)
+    append_layout_diagnostic_log("Submitted final road and city-block attribute state")
+    bpy.ops.object.mode_set(mode="OBJECT")
+    append_layout_diagnostic_log("Returned to Object Mode")
+
+    final_counts = (len(mesh.vertices), len(mesh.edges), len(mesh.polygons))
+    append_layout_diagnostic_log(
+        f"After: {final_counts[0]} nodes, {final_counts[1]} edges, {final_counts[2]} faces"
+    )
+    expected_counts = (
+        len(payload["vertices"]),
+        len(payload["edges"]),
+        len(payload["faces"]),
+    )
+    if final_counts != expected_counts:
+        raise RuntimeError(
+            "ICity Base topology counts do not match the Draft after Apply. "
+            f"Expected {expected_counts}, got {final_counts}."
+        )
+
+    final_road_attribute = mesh.attributes.get("Road del")
+    road_deleted_values = [
+        bool(_attribute_value(item))
+        for item in getattr(final_road_attribute, "data", [])
+    ]
+    actual_enabled_roads = sum(not value for value in road_deleted_values)
+    expected_enabled_roads = sum(payload["edge_road_enabled"])
+    append_layout_diagnostic_log(
+        f"Road del check: {actual_enabled_roads} enabled, "
+        f"{len(road_deleted_values) - actual_enabled_roads} disabled"
+    )
+    if (
+        len(road_deleted_values) != len(payload["edges"])
+        or actual_enabled_roads != expected_enabled_roads
+    ):
+        raise RuntimeError(
+            "Road del values do not match the Draft after Apply. "
+            f"Expected {expected_enabled_roads} enabled of {len(payload['edges'])}, "
+            f"got {actual_enabled_roads} enabled of {len(road_deleted_values)}."
+        )
+
+    final_space_type_attribute = mesh.attributes.get("space type")
+    space_type_values = [
+        int(_attribute_value(item))
+        for item in getattr(final_space_type_attribute, "data", [])
+    ]
+    procedural_faces = sum(value == 0 for value in space_type_values)
+    append_layout_diagnostic_log(
+        f"space type check: {procedural_faces} Procedural faces of {len(space_type_values)}"
+    )
+    if len(space_type_values) != len(payload["faces"]) or procedural_faces != len(payload["faces"]):
+        raise RuntimeError(
+            "space type values do not match the Draft faces after Apply. "
+            f"Expected {len(payload['faces'])} Procedural faces, "
+            f"got {procedural_faces} of {len(space_type_values)}."
+        )
+
+    return {
+        "original_counts": original_counts,
+        "final_counts": final_counts,
+        "enabled_roads": actual_enabled_roads,
+        "disabled_roads": len(road_deleted_values) - actual_enabled_roads,
+        "procedural_faces": procedural_faces,
+    }
+
+
+def build_candidate_icity_mesh(base_object, graph: dict):
+    """Build and validate a complete replacement mesh without touching Base."""
+
+    payload = build_layout_mesh_payload(graph)
+    if not payload["vertices"] or not payload["edges"]:
+        raise RuntimeError("Draft must contain at least one valid road edge.")
+    candidate = bpy.data.meshes.new("ICity Base Layout Candidate")
+    try:
+        candidate.from_pydata(payload["vertices"], payload["edges"], payload["faces"])
+        candidate.update(calc_edges=False)
+        candidate.validate(verbose=False, clean_customdata=False)
+        candidate.update()
+        actual_counts = (
+            len(getattr(candidate, "vertices", [])),
+            len(getattr(candidate, "edges", [])),
+            len(getattr(candidate, "polygons", [])),
+        )
+        expected_counts = (
+            len(payload["vertices"]),
+            len(payload["edges"]),
+            len(payload["faces"]),
+        )
+        if actual_counts != expected_counts:
+            raise RuntimeError(
+                "Blender changed the candidate topology during validation: "
+                f"expected {expected_counts}, got {actual_counts}."
+            )
+
+        # Material slots belong to the Mesh datablock rather than the Object.
+        # Preserve them before the final data swap so Geometry Nodes and any
+        # direct mesh material references continue to resolve.
+        for material in getattr(base_object.data, "materials", []):
+            candidate.materials.append(material)
+        attribute_stats = copy_mesh_attribute_schema_and_values(base_object.data, candidate, payload)
+        candidate.update()
+    except Exception:
+        bpy.data.meshes.remove(candidate)
+        raise
+    return candidate, payload, attribute_stats
+
+
+def swap_candidate_into_icity_base(base_object, candidate_mesh) -> str:
+    """Reject the known-crashing Mesh-datablock replacement strategy."""
+
+    raise RuntimeError(
+        "Replacing ICity Base.data is disabled because it reproducibly crashes Blender 4.1. "
+        "Apply must mutate the existing Base Mesh through BMesh/Edit Mode."
+    )
+
+
 def next_unique_id(existing_ids, prefix: str) -> str:
     """Return the first unused deterministic ID for a new draft item."""
 
@@ -981,6 +1807,31 @@ def write_layout_graph_text(graph: dict):
     text.clear()
     text.write(format_layout_graph_export(graph))
     return text
+
+
+def reset_layout_diagnostic_log(lines: list[str]):
+    """Start a concise diagnostic log visible in Blender's Text Editor."""
+
+    text = bpy.data.texts.get(LAYOUT_DIAGNOSTIC_TEXT)
+    if text is None:
+        text = bpy.data.texts.new(LAYOUT_DIAGNOSTIC_TEXT)
+    text.clear()
+    for line in lines:
+        message = str(line)
+        text.write(message + "\n")
+        print(f"[ICity Layout] {message}")
+    return text
+
+
+def append_layout_diagnostic_log(line: str) -> None:
+    """Append one Apply stage to both the Text Editor and system console."""
+
+    text = bpy.data.texts.get(LAYOUT_DIAGNOSTIC_TEXT)
+    if text is None:
+        text = bpy.data.texts.new(LAYOUT_DIAGNOSTIC_TEXT)
+    message = str(line)
+    text.write(message + "\n")
+    print(f"[ICity Layout] {message}")
 
 
 def clear_layout_preview() -> int:
@@ -1199,6 +2050,97 @@ class ICITY_OT_LoadLayoutDraftFromBase(Operator):
         return {"FINISHED"}
 
 
+class ICITY_OT_ImportLayoutJSON(Operator):
+    """Load a complete structured point/road graph into the editable draft."""
+
+    bl_idname = "icity.import_layout_json"
+    bl_label = "Import JSON To Draft"
+    bl_description = "Import a LayoutGraph JSON file, or read the Layout Graph Export text when no file is selected"
+    bl_options = {"REGISTER", "UNDO"}
+
+    def execute(self, context):
+        filepath = bpy.path.abspath(context.scene.icity_layout_json_path)
+        try:
+            if filepath:
+                with open(filepath, "r", encoding="utf-8") as input_file:
+                    content = input_file.read()
+                source_label = filepath
+            else:
+                text = bpy.data.texts.get(LAYOUT_GRAPH_TEXT)
+                if text is None:
+                    raise RuntimeError(
+                        f"Choose a JSON file or create the Text Editor block: {LAYOUT_GRAPH_TEXT}"
+                    )
+                content = text.as_string()
+                source_label = LAYOUT_GRAPH_TEXT
+            graph = parse_layout_graph_json_text(content)
+            populate_layout_draft(context.scene, graph)
+            validation = validate_layout_graph(graph)
+            write_validation_details(context.scene, validation)
+            write_layout_graph_text(graph)
+            preview_stats = refresh_layout_preview(context.scene, graph)
+        except Exception as exc:  # pragma: no cover - surfaced in Blender UI
+            self.report({"ERROR"}, f"Import layout JSON failed: {exc}")
+            return {"CANCELLED"}
+
+        context.scene.icity_layout_node_index = 0
+        context.scene.icity_layout_edge_index = 0
+        context.scene.icity_layout_draft_summary = (
+            f"JSON imported: {len(graph['nodes'])} nodes, {len(graph['edges'])} edges; "
+            f"{preview_stats['objects']} preview objects"
+        )
+        self.report({"INFO"}, f"Layout JSON imported from {source_label}.")
+        return {"FINISHED"}
+
+
+class ICITY_OT_ImportLayoutSketch(Operator):
+    bl_idname = "icity.import_layout_sketch"
+    bl_label = "Import Sketch To Draft"
+    bl_description = "Extract nodes and road edges from a simple white-background black-line sketch"
+    bl_options = {"REGISTER", "UNDO"}
+
+    def execute(self, context):
+        filepath = bpy.path.abspath(context.scene.icity_layout_sketch_path)
+        if not filepath:
+            self.report({"ERROR"}, "Choose a sketch image file first.")
+            return {"CANCELLED"}
+        try:
+            from .layout_sketch import image_file_to_layout_graph
+
+            graph, stats = image_file_to_layout_graph(
+                filepath,
+                threshold=context.scene.icity_layout_sketch_threshold,
+                max_dimension=context.scene.icity_layout_sketch_max_dimension,
+                world_width=context.scene.icity_layout_sketch_world_width,
+                endpoint_snap_distance=context.scene.icity_layout_sketch_endpoint_snap_distance,
+                maximum_turn_degrees=context.scene.icity_layout_sketch_straighten_angle,
+            )
+            graph, _ = normalize_layout_graph(
+                graph,
+                merge_distance=context.scene.icity_layout_merge_distance,
+                intersection_tolerance=context.scene.icity_layout_intersection_tolerance,
+                minimum_edge_length=context.scene.icity_layout_minimum_edge_length,
+            )
+            populate_layout_draft(context.scene, graph)
+            validation = validate_layout_graph(graph)
+            write_validation_details(context.scene, validation)
+            write_layout_graph_text(graph)
+            preview_stats = refresh_layout_preview(context.scene, graph)
+        except Exception as exc:  # pragma: no cover - surfaced in Blender UI
+            self.report({"ERROR"}, f"Import layout sketch failed: {exc}")
+            return {"CANCELLED"}
+
+        context.scene.icity_layout_node_index = 0
+        context.scene.icity_layout_edge_index = 0
+        context.scene.icity_layout_draft_summary = (
+            f"Sketch imported: {stats['nodes']} nodes, {stats['edges']} edges, "
+            f"normalized to {len(graph['nodes'])} nodes, {len(graph['edges'])} edges; "
+            f"{preview_stats['objects']} preview objects"
+        )
+        self.report({"INFO"}, "Sketch converted to editable layout draft.")
+        return {"FINISHED"}
+
+
 class ICITY_OT_ExportLayoutDraft(Operator):
     """Export the editable UI draft as layout graph JSON."""
 
@@ -1363,6 +2305,161 @@ class ICITY_OT_NormalizeLayoutDraft(Operator):
         return {"FINISHED"}
 
 
+class ICITY_OT_ApplyLayoutDraftToBase(Operator):
+    """Replace the real ICity Base roads and inferred city blocks through Edit Mode."""
+
+    bl_idname = "icity.apply_layout_draft_to_base"
+    bl_label = "Apply Draft Layout"
+    bl_description = "Replace ICity Base roads and inferred city-block faces with the normalized Draft"
+    bl_options = {"REGISTER", "UNDO"}
+
+    current_topology: StringProperty(name="Current Topology", default="", options={"HIDDEN"})
+    target_topology: StringProperty(name="Target Topology", default="", options={"HIDDEN"})
+
+    def execute(self, context):
+        global _last_contract_report
+
+        try:
+            graph, normalization_stats = normalize_layout_graph(
+                build_layout_graph_from_draft(context.scene),
+                merge_distance=context.scene.icity_layout_merge_distance,
+                intersection_tolerance=context.scene.icity_layout_intersection_tolerance,
+                minimum_edge_length=context.scene.icity_layout_minimum_edge_length,
+            )
+            validation = validate_layout_graph(graph)
+            write_validation_details(context.scene, validation)
+            if validation["errors"]:
+                raise RuntimeError("Draft validation failed: " + "; ".join(validation["errors"]))
+
+            stats = replace_icity_base_roads_via_edit_mode(context, graph)
+            populate_layout_draft(context.scene, graph)
+            write_layout_graph_text(graph)
+            clear_layout_preview()
+            _last_contract_report = inspect_icity_base_contract()
+            write_contract_report_text(_last_contract_report)
+        except Exception as exc:  # pragma: no cover - surfaced in Blender UI
+            try:
+                active = context.view_layer.objects.active
+                if context.mode == "EDIT_MESH" and getattr(active, "name", "") == ICITY_BASE_OBJECT:
+                    bpy.ops.object.mode_set(mode="OBJECT")
+            except Exception:
+                pass
+            try:
+                append_layout_diagnostic_log(f"ERROR: {exc}")
+            except Exception:
+                pass
+            self.report({"ERROR"}, f"Apply Draft layout failed: {exc}")
+            return {"CANCELLED"}
+
+        context.scene.icity_layout_draft_summary = (
+            f"Applied Draft layout: {stats['final_counts'][0]} nodes, "
+            f"{stats['enabled_roads']} enabled roads, {stats['disabled_roads']} disabled roads. "
+            f"{stats['procedural_faces']} Procedural blocks. "
+            f"{format_normalization_summary(normalization_stats)}"
+        )
+        self.report({"INFO"}, f"Draft layout applied. Log: {LAYOUT_DIAGNOSTIC_TEXT}")
+        return {"FINISHED"}
+
+    def draw(self, context):
+        layout = self.layout
+        layout.label(text="This replaces the real ICity Base road and block layout.", icon="ERROR")
+        if self.current_topology:
+            layout.label(text=self.current_topology)
+        if self.target_topology:
+            layout.label(text=self.target_topology)
+        layout.label(text="Existing Base points, edges, and faces will be removed.")
+        layout.label(text="Closed Draft road loops become Procedural city-block faces.")
+        layout.label(text=f"Diagnostic Text: {LAYOUT_DIAGNOSTIC_TEXT}")
+
+    def invoke(self, context, event):
+        try:
+            base_object = bpy.data.objects.get(ICITY_BASE_OBJECT)
+            if base_object is None or getattr(base_object, "data", None) is None:
+                raise RuntimeError("ICity Base was not found. Run iCity Start first.")
+            graph, _ = normalize_layout_graph(
+                build_layout_graph_from_draft(context.scene),
+                merge_distance=context.scene.icity_layout_merge_distance,
+                intersection_tolerance=context.scene.icity_layout_intersection_tolerance,
+                minimum_edge_length=context.scene.icity_layout_minimum_edge_length,
+            )
+            validation = validate_layout_graph(graph)
+            if validation["errors"]:
+                raise RuntimeError("Draft validation failed: " + "; ".join(validation["errors"]))
+            target_payload = build_layout_apply_payload(graph)
+            self.current_topology = (
+                f"Current: {len(base_object.data.vertices)} nodes, "
+                f"{len(base_object.data.edges)} edges, {len(base_object.data.polygons)} faces"
+            )
+            self.target_topology = (
+                f"Target: {len(target_payload['vertices'])} nodes, "
+                f"{len(target_payload['edges'])} edges, "
+                f"{len(target_payload['faces'])} inferred faces"
+            )
+        except Exception as exc:  # pragma: no cover - surfaced in Blender UI
+            self.report({"ERROR"}, f"Cannot prepare Draft Apply: {exc}")
+            return {"CANCELLED"}
+        return context.window_manager.invoke_props_dialog(self, width=520)
+
+
+class ICITY_OT_AppendSelectedDraftRoadNative(Operator):
+    """Safely probe ICity write-back by appending one selected draft road."""
+
+    bl_idname = "icity.append_selected_draft_road_native"
+    bl_label = "Append Selected Draft Road (Experimental)"
+    bl_description = "Append only the selected draft road through ICity Base Edit Mode without rebuilding existing topology"
+    bl_options = {"REGISTER", "UNDO"}
+
+    road_summary: StringProperty(name="Road Summary", default="", options={"HIDDEN"})
+
+    def execute(self, context):
+        try:
+            stats = append_selected_draft_road_via_edit_mode(context)
+        except Exception as exc:  # pragma: no cover - surfaced in Blender UI
+            # Do not strand the user inside Base Edit Mode after a normal
+            # Python-side validation or attribute error.
+            try:
+                active = context.view_layer.objects.active
+                if context.mode == "EDIT_MESH" and getattr(active, "name", "") == ICITY_BASE_OBJECT:
+                    bpy.ops.object.mode_set(mode="OBJECT")
+            except Exception:
+                pass
+            self.report({"ERROR"}, f"Experimental road append failed: {exc}")
+            return {"CANCELLED"}
+
+        context.scene.icity_layout_draft_summary = (
+            f"Native edit experiment: {stats['edge_id']}; "
+            f"added {stats['created_vertices']} vertices and "
+            f"{1 if stats['created_edge'] else 0} edge"
+        )
+        self.report(
+            {"INFO"},
+            f"Selected draft road processed through ICity Base Edit Mode: {stats['edge_id']}.",
+        )
+        return {"FINISHED"}
+
+    def draw(self, context):
+        layout = self.layout
+        layout.label(text="Experimental incremental write to the real ICity Base.", icon="ERROR")
+        if self.road_summary:
+            layout.label(text=self.road_summary)
+        layout.label(text="Existing vertices, edges, faces, and attributes are preserved.")
+        layout.label(text="Only missing endpoints and the selected road may be appended.")
+        layout.label(text="This does not apply the complete draft.")
+
+    def invoke(self, context, event):
+        try:
+            graph = build_layout_graph_from_draft(context.scene)
+            spec = selected_incremental_road_spec(graph, context.scene.icity_layout_edge_index)
+            self.road_summary = (
+                f"{spec['edge_id']}: {spec['start'].get('id', '?')} -> "
+                f"{spec['end'].get('id', '?')}; road enabled: {spec['enabled_as_road']}"
+            )
+        except Exception as exc:  # pragma: no cover - surfaced in Blender UI
+            self.report({"ERROR"}, f"Cannot prepare experimental road append: {exc}")
+            return {"CANCELLED"}
+        return context.window_manager.invoke_props_dialog(self, width=500)
+
+
 class ICITY_OT_RefreshLayoutDraftPreview(Operator):
     bl_idname = "icity.refresh_layout_draft_preview"
     bl_label = "Show / Refresh Draft Preview"
@@ -1491,12 +2588,18 @@ class ICITY_PT_LayoutControlPanel(Panel):
         details_box.label(text="Developer Details", icon="TEXT")
         details_box.label(text=f"Text Editor: {LAYOUT_CONTRACT_TEXT}")
         details_box.label(text=f"Layout JSON: {LAYOUT_GRAPH_TEXT}")
+        details_box.label(text=f"Apply Log: {LAYOUT_DIAGNOSTIC_TEXT}")
 
         draft_box = layout.box()
-        draft_box.label(text="Phase 2 Draft Editor (No Apply Yet)", icon="GREASEPENCIL")
+        draft_box.label(text="Layout Draft Editor", icon="GREASEPENCIL")
         row = draft_box.row(align=True)
         row.operator("icity.load_layout_draft_from_base", icon="IMPORT")
         row.operator("icity.export_layout_draft", icon="EXPORT")
+        json_box = draft_box.box()
+        json_box.label(text="Import Structured Layout JSON", icon="FILE_TEXT")
+        json_box.prop(context.scene, "icity_layout_json_path")
+        json_box.label(text=f"Empty path reads Text Editor: {LAYOUT_GRAPH_TEXT}")
+        json_box.operator("icity.import_layout_json", icon="IMPORT")
         draft_box.operator("icity.validate_layout_draft", icon="CHECKMARK")
         if context.scene.icity_layout_draft_summary:
             draft_box.label(text=context.scene.icity_layout_draft_summary)
@@ -1513,6 +2616,16 @@ class ICITY_PT_LayoutControlPanel(Panel):
         normalize_box.prop(context.scene, "icity_layout_minimum_edge_length")
         normalize_box.operator("icity.normalize_layout_draft", icon="AUTOMERGE_ON")
 
+        apply_box = draft_box.box()
+        apply_box.label(text="Apply Draft Layout", icon="CHECKMARK")
+        apply_box.label(text="Replaces Base roads and creates Procedural blocks from closed loops.")
+        apply_box.label(text="Sketch and manual Drafts use the same replacement behavior.")
+        apply_box.operator("icity.apply_layout_draft_to_base", icon="MESH_DATA")
+        experiment_box = apply_box.box()
+        experiment_box.label(text="Native Edit Mode Write Test", icon="INFO")
+        experiment_box.label(text="Appends only the selected Draft edge; does not replace the city.")
+        experiment_box.operator("icity.append_selected_draft_road_native", icon="ADD")
+
         preview_box = draft_box.box()
         preview_box.label(text="Draft Viewport Preview", icon="HIDE_OFF")
         preview_box.label(text="Independent preview; does not modify ICity Base")
@@ -1522,6 +2635,18 @@ class ICITY_PT_LayoutControlPanel(Panel):
         preview_actions = preview_box.row(align=True)
         preview_actions.operator("icity.refresh_layout_draft_preview", icon="FILE_REFRESH")
         preview_actions.operator("icity.clear_layout_draft_preview", icon="TRASH")
+
+        sketch_box = draft_box.box()
+        sketch_box.label(text="Import Black-Line Sketch", icon="IMAGE_DATA")
+        sketch_box.prop(context.scene, "icity_layout_sketch_path")
+        sketch_box.prop(context.scene, "icity_layout_sketch_threshold")
+        sketch_box.prop(context.scene, "icity_layout_sketch_world_width")
+        sketch_box.prop(context.scene, "icity_layout_sketch_max_dimension")
+        sketch_box.prop(context.scene, "icity_layout_sketch_endpoint_snap_distance")
+        sketch_box.prop(context.scene, "icity_layout_sketch_straighten_angle")
+        sketch_box.label(text="White background, dark road centerlines")
+        sketch_box.label(text="Requires OpenCV in Blender Python", icon="INFO")
+        sketch_box.operator("icity.import_layout_sketch", icon="IMAGE")
 
         node_list_box = draft_box.box()
         node_list_box.label(text="Editable Nodes", icon="VERTEXSEL")
@@ -1576,6 +2701,8 @@ CLASSES = (
     ICITY_OT_InspectLayoutContract,
     ICITY_OT_ExportLayoutGraph,
     ICITY_OT_LoadLayoutDraftFromBase,
+    ICITY_OT_ImportLayoutJSON,
+    ICITY_OT_ImportLayoutSketch,
     ICITY_OT_ExportLayoutDraft,
     ICITY_OT_AddLayoutDraftNode,
     ICITY_OT_RemoveLayoutDraftNode,
@@ -1583,6 +2710,8 @@ CLASSES = (
     ICITY_OT_RemoveLayoutDraftEdge,
     ICITY_OT_ValidateLayoutDraft,
     ICITY_OT_NormalizeLayoutDraft,
+    ICITY_OT_ApplyLayoutDraftToBase,
+    ICITY_OT_AppendSelectedDraftRoadNative,
     ICITY_OT_RefreshLayoutDraftPreview,
     ICITY_OT_ClearLayoutDraftPreview,
     ICITY_PT_LayoutControlPanel,
@@ -1611,6 +2740,12 @@ def register() -> None:
     bpy.types.Scene.icity_layout_edges = CollectionProperty(type=ICITY_LayoutEdgeDraft)
     bpy.types.Scene.icity_layout_node_index = IntProperty(name="Node Index", default=0)
     bpy.types.Scene.icity_layout_edge_index = IntProperty(name="Edge Index", default=0)
+    bpy.types.Scene.icity_layout_json_path = StringProperty(
+        name="Layout JSON",
+        description="Optional LayoutGraph JSON file; leave empty to read the Layout Graph Export Text block",
+        default="",
+        subtype="FILE_PATH",
+    )
     bpy.types.Scene.icity_layout_merge_distance = FloatProperty(
         name="Merge Distance",
         description="Draft nodes within this distance are merged into the first matching node",
@@ -1646,12 +2781,58 @@ def register() -> None:
         description="Local Z offset keeping the preview visible above the current city",
         default=0.4,
     )
+    bpy.types.Scene.icity_layout_sketch_path = StringProperty(
+        name="Sketch Image",
+        description="Simple white-background image containing dark road centerlines",
+        default="",
+        subtype="FILE_PATH",
+    )
+    bpy.types.Scene.icity_layout_sketch_threshold = FloatProperty(
+        name="Dark Threshold",
+        description="Pixels darker than this luminance are interpreted as road lines",
+        default=0.45,
+        min=0.0,
+        max=1.0,
+    )
+    bpy.types.Scene.icity_layout_sketch_world_width = FloatProperty(
+        name="Layout Width",
+        description="Width of the recognized sketch in ICity Base local units",
+        default=120.0,
+        min=1.0,
+    )
+    bpy.types.Scene.icity_layout_sketch_max_dimension = IntProperty(
+        name="Max Processing Size",
+        description="Downsample large images before OpenCV skeleton recognition",
+        default=512,
+        min=32,
+        max=2048,
+    )
+    bpy.types.Scene.icity_layout_sketch_endpoint_snap_distance = FloatProperty(
+        name="Endpoint Snap Distance",
+        description="Merge nearby sketch endpoints without affecting existing corners and junctions",
+        default=2.5,
+        min=0.0,
+    )
+    bpy.types.Scene.icity_layout_sketch_straighten_angle = FloatProperty(
+        name="Straighten Angle",
+        description="Remove degree-two sketch nodes whose road direction changes by no more than this angle",
+        default=20.0,
+        min=0.0,
+        max=60.0,
+    )
 
 
 def unregister() -> None:
     for property_name in (
         "icity_layout_edge_index",
         "icity_layout_node_index",
+        "icity_layout_json_path",
+        "icity_layout_sketch_straighten_angle",
+        "icity_layout_sketch_endpoint_snap_distance",
+        "icity_layout_sketch_max_dimension",
+        "icity_layout_sketch_world_width",
+        "icity_layout_sketch_threshold",
+        "icity_layout_sketch_path",
         "icity_layout_preview_height",
         "icity_layout_preview_node_radius",
         "icity_layout_preview_road_width",
