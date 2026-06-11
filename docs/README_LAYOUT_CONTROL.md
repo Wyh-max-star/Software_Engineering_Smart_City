@@ -1,5 +1,8 @@
 # ICity Layout Control
 
+Chinese user guide and acceptance checklist:
+[`README_LAYOUT_CONTROL_USAGE_CN.md`](README_LAYOUT_CONTROL_USAGE_CN.md).
+
 Implementation differences from the original design are tracked in
 [`LAYOUT_CONTROL_DEVIATIONS.md`](LAYOUT_CONTROL_DEVIATIONS.md).
 
@@ -36,22 +39,6 @@ replaces the existing Base road and block layout rather than overlapping it.
 
 Every formal Apply writes stage information to the Blender Text datablock
 `ICity Layout Diagnostic Log` and to the system console.
-
-## Experimental Native Edit Test
-
-The layout panel includes `Append Selected Draft Road (Experimental)`. It is a
-diagnostic step toward a safe Apply implementation:
-
-1. select one edge in the Editable Edges Draft list;
-2. run the experimental action and confirm the exact edge shown;
-3. the action enters the existing `ICity Base` Edit BMesh;
-4. it reuses source vertices or appends missing endpoints;
-5. it appends or selects that one edge and sets `Road del` using Blender's
-   `mesh.attribute_set`, matching ICity's Assign Road workflow.
-
-It never deletes or moves existing geometry, creates faces, or applies the
-complete Draft. It remains available as a narrow diagnostic if formal Apply
-needs troubleshooting.
 
 ## Known Sketch Limitation
 
