@@ -15,7 +15,43 @@
 
 ---
 
-## 二、需要测试的功能
+## 二、修改的代码文件
+
+### 1. `smart_city/template_core.py` — 纯逻辑层
+
+| 行号 | 修改内容 |
+|------|----------|
+| L21 | LLM 模型名 `"deepseek-v4-flash"` |
+| L22 | 超时从 15s → **25s** |
+| L29 | `ALL_CATS` 包含全部 7 种资产 |
+| L31 | `LLM_CATS = list(ALL_CATS)` — LLM 控制全部资产 |
+| L57-61 | 新增 `WEATHER_MODES` / `WEATHER_MODE_TITLE` 常量（7 种天气） |
+| L198-227 | `rule_parse_scene()` 新增天气关键词识别（晴天/阴天/雨天/夜晚/雾/黄昏/雪） |
+| L153-156 | `expand_scene()` 新增 `weather` 透传 |
+| L266-272 | `build_scene_prompt_block()` 天气描述加入 prompt |
+| L286-287 | LLM 输出 schema 加入 `weather` 字段 |
+| L292 | LLM 示例加入 `"weather": "cloudy"` |
+| L354+ | `_has_content()` 显式检查 `_scene.weather` 字段 |
+| 规则中 | 关键词冲突修复：`"黄黑"` → `"黄黑隔离柱"`，避免误匹配路缘石 |
+
+### 2. `smart_city/template_extension.py` — Blender 执行层
+
+| 行号 | 修改内容 |
+|------|----------|
+| L1-8 | 文件头文档 |
+| L30-31 | 导入 `WEATHER_MODES`、`WEATHER_MODE_TITLE` |
+| L34-50 | 新增 `_last_scene_cfg` / `_last_asset_sel` + `_merge_incremental()` 增量合并 |
+| L189-233 | `apply_weather()` 控制 World Background + 路灯颜色/亮度 |
+| L236-330 | `_ensure_weather_particles()` 创建雨/雪粒子系统 |
+| L288-298 | `_clear_weather_particles()` 清理旧粒子 |
+| L320-330 | `_clear_volumetric_fog()` 清理体积雾 |
+| L440+ | `execute()` 集成增量合并 + 天气应用 |
+| L450+ | 面板提示文字 |
+| 全文件 | 与 Blender 4.1 API 兼容性修复（`RANDOM`→`RAND`、`material_slots`→`material_slot` 等） |
+
+---
+
+## 三、需要测试的功能
 
 ### 测试项 1：资产替换（7 种）
 
@@ -114,7 +150,7 @@
 
 ---
 
-## 三、测试环境与操作说明
+## 四、测试环境与操作说明
 
 ### 环境要求
 
@@ -127,9 +163,61 @@
 1. 启动 Blender，确保 iCity 插件已启用（Edit → Preferences → Add-ons → 勾选 iCity）
 2. 在 3D 视口按 **N** 打开侧栏，找到 **iCity** 标签页
 3. 点击 **模板化生成** 面板
-4. 在 **自然语言编辑** 输入框中输入测试指令，点击 **应用**
+4. 在 **自然语言编辑** 输入框中输入测试指令，点击 **应用** 按钮
+5. 观察 3D 视口变化（建议切换到 **Material Preview** 视口模式）
+6. 按 **Window → Toggle System Console** 打开控制台，查看 `[模板插件]` 日志
 
-# 四、代码修改
+### 视口模式切换
 
-见README.docx
+在 3D 视口右上角点击图标切换：
+- 第三个球（Material Preview）：查看材质和天气效果
+- 第四个球（Rendered）：查看最终渲染效果
 
+### 检查粒子效果
+
+雨/雪粒子需要：
+1. 进入 Material Preview 或 Rendered 视口
+2. 点击视口右上角 **Overlay 菜单（下箭头）** → 确保 **Particles** 勾选
+3. 按 **空格键** 播放动画，观察粒子下落
+
+---
+
+## 五、代码覆盖率测试指引
+
+### 核心函数覆盖
+
+| 函数 | 所在文件 | 测试重点 |
+|------|----------|----------|
+| `parse_command()` | template_core.py | LLM 解析 + 规则兜底 + `_has_content` 判断 |
+| `expand_scene()` | template_core.py | 场景维度档位→数值换算 |
+| `validate_selection()` | template_core.py | 资产名称合法性校验 |
+| `rule_parse_assets()` | template_core.py | 资产关键词匹配 |
+| `rule_parse_scene()` | template_core.py | 场景/天气关键词匹配 |
+| `_has_content()` | template_core.py | 含 weather 字段的非空判断 |
+| `build_scene_prompt_block()` | template_core.py | LLM prompt 构造 |
+| `_merge_incremental()` | template_extension.py | 增量合并逻辑 |
+| `apply_weather()` | template_extension.py | 天气应用（世界背景+路灯） |
+| `_ensure_weather_particles()` | template_extension.py | 雨/雪粒子创建 |
+| `_clear_weather_particles()` | template_extension.py | 粒子清理 |
+| `apply_selection()` | template_extension.py | 资产应用到场景 |
+| `apply_scene_dimensions()` | template_extension.py | 场景维度应用到场景 |
+
+### 分支覆盖重点
+
+- `parse_command()`：LLM 成功 / LLM 失败退规则 / 规则无匹配
+- `expand_scene()`：各档位（none/low/medium/high）→ 不同数值
+- `_has_content()`：纯资产 / 纯场景 / 纯天气 / 无内容
+- `_merge_incremental()`：首次 vs 多轮 / 新值 vs 旧值保留 / _clear 指令
+- `apply_weather()`：7 种天气模式各一次 / 晴天到雨天的粒子清理
+
+---
+
+## 六、常见问题排查
+
+| 现象 | 原因 | 解决 |
+|------|------|------|
+| 输入后无变化 | LLM 超时且规则未匹配 | 查看控制台 `[模板插件]` 日志，检查是否退回规则解析 |
+| 粒子不可见 | 视口模式不对或 Overlay 关闭 | 切换到 Material Preview，勾选 Overlay → Particles |
+| 雨/雪粒子卡顿 | 粒子数量过多 | 修改 `settings.count` 降低粒子数（当前雨 25000 / 雪 15000） |
+| 天气没变化 | 视口不是 Material Preview | 切换右上角视口模式 |
+| 提示 "没听懂" | 输入文本无匹配关键词 | 使用上方测试样例中的指令 |
