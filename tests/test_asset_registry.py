@@ -122,6 +122,42 @@ class AssetRegistryTests(unittest.TestCase):
 
         self.assertEqual(issues, [])
 
+<<<<<<< HEAD
+=======
+    def test_load_manifest_supports_collection_based_blend_asset(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            model = root / "assets" / "vehicles" / "chevy.blend"
+            model.parent.mkdir(parents=True)
+            model.write_text("blend", encoding="utf-8")
+            manifest_path = root / "asset_manifest.json"
+            manifest_path.write_text(
+                json.dumps(
+                    {
+                        "textures": [],
+                        "objects": [
+                            {
+                                "id": "vehicle_chevy_demo",
+                                "name": "Chevrolet Demo",
+                                "category": "traffic_vehicle",
+                                "path": "assets/vehicles/chevy.blend",
+                                "collection_name": "1986 Chevrolet M1009",
+                                "object_name": "1986 Chevrolet M1009",
+                                "usage": "traffic_vehicle",
+                            }
+                        ],
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+
+            manifest = load_manifest(manifest_path, addon_root=root)
+            asset = get_object_asset(manifest, "vehicle_chevy_demo")
+
+        self.assertEqual(asset_registry.blend_asset_target(asset), ("collection", "1986 Chevrolet M1009"))
+
+>>>>>>> origin/qjw
 
 if __name__ == "__main__":
     unittest.main()

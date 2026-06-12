@@ -2,20 +2,27 @@ import {
   ArrowRight,
   BadgeCheck,
   BarChart3,
+<<<<<<< HEAD
   BookOpenCheck,
+=======
+>>>>>>> origin/qjw
   Boxes,
   Building2,
   CheckCircle2,
   ChevronLeft,
   ChevronRight,
+<<<<<<< HEAD
   ClipboardCheck,
   ClipboardList,
+=======
+>>>>>>> origin/qjw
   DoorOpen,
   ExternalLink,
   LayoutDashboard,
   LogOut,
   Menu,
   MonitorPlay,
+<<<<<<< HEAD
   Plus,
   PlugZap,
   Save,
@@ -27,6 +34,14 @@ import {
   Trees,
   UserRoundCog,
   XCircle,
+=======
+  PlugZap,
+  Search,
+  ShieldCheck,
+  Store,
+  Trees,
+  UserRoundCog,
+>>>>>>> origin/qjw
 } from 'lucide-react'
 import { useEffect, useMemo, useState, type FormEvent, type ReactNode } from 'react'
 import { Link, Navigate, Route, Routes, useLocation, useNavigate, useParams } from 'react-router-dom'
@@ -37,6 +52,7 @@ const selectedTemplateKey = 'icity-selected-template'
 const roleKey = 'icity-current-role'
 const usersKey = 'icity-local-users'
 const currentUserKey = 'icity-current-user'
+<<<<<<< HEAD
 const sessionExpiresAtKey = 'icity-session-expires-at'
 const sidebarCollapsedKey = 'icity-sidebar-collapsed'
 const pageHistoryKey = 'icity-page-history'
@@ -45,6 +61,10 @@ const acceptanceStandardsKey = 'icity-acceptance-standards'
 const industryMemoKey = 'icity-industry-demand-memo'
 const adminLogsKey = 'icity-admin-operation-logs'
 const sessionDurationMs = 12 * 60 * 60 * 1000
+=======
+const sidebarCollapsedKey = 'icity-sidebar-collapsed'
+const pageHistoryKey = 'icity-page-history'
+>>>>>>> origin/qjw
 
 type LocalUser = {
   id: string
@@ -56,6 +76,7 @@ type LocalUser = {
 }
 
 type LoginMethod = 'email' | 'username'
+<<<<<<< HEAD
 type AnalystReviewStatus = 'pending' | 'passed' | 'changes_requested'
 type AdminReviewStatus = 'waiting_analyst' | 'pending' | 'listed' | 'rejected'
 type PluginReviewAction = (id: string, updater: (item: PluginReviewItem) => PluginReviewItem) => void
@@ -65,6 +86,8 @@ type AdminLogInput = {
   target: string
   detail: string
 }
+=======
+>>>>>>> origin/qjw
 type PermissionKey =
   | 'viewTemplates'
   | 'applyTemplate'
@@ -73,6 +96,7 @@ type PermissionKey =
   | 'reviewPlugin'
   | 'recordAcceptance'
 
+<<<<<<< HEAD
 type PluginReviewItem = {
   id: string
   name: string
@@ -199,6 +223,8 @@ const defaultIndustryMemo: IndustryDemandMemo = {
   ].join('\n'),
 }
 
+=======
+>>>>>>> origin/qjw
 const permissionRules: { key: PermissionKey; title: string; description: string }[] = [
   {
     key: 'viewTemplates',
@@ -308,6 +334,7 @@ function writeUsers(users: LocalUser[]) {
   localStorage.setItem(usersKey, JSON.stringify(users))
 }
 
+<<<<<<< HEAD
 function readPluginReviews(): PluginReviewItem[] {
   try {
     const rawReviews = localStorage.getItem(pluginReviewsKey)
@@ -388,10 +415,13 @@ function clearStoredSession() {
   sessionStorage.removeItem(pageHistoryKey)
 }
 
+=======
+>>>>>>> origin/qjw
 function readCurrentUser() {
   try {
     const rawUser = localStorage.getItem(currentUserKey)
     if (!rawUser) return null
+<<<<<<< HEAD
     const expiresAt = readSessionExpiry()
     if (expiresAt && expiresAt <= Date.now()) {
       clearStoredSession()
@@ -400,6 +430,8 @@ function readCurrentUser() {
     if (!expiresAt) {
       localStorage.setItem(sessionExpiresAtKey, String(createSessionExpiry()))
     }
+=======
+>>>>>>> origin/qjw
     const parsedUser = JSON.parse(rawUser) as LocalUser
     return roles.some((item) => item.id === parsedUser.role) ? parsedUser : null
   } catch {
@@ -430,6 +462,7 @@ function canManagePermissions(role: RoleId) {
   return rolePermissions[role].managePermissions
 }
 
+<<<<<<< HEAD
 function canRecordAcceptance(role: RoleId) {
   return rolePermissions[role].recordAcceptance
 }
@@ -475,6 +508,8 @@ function adminLogActionLabel(action: AdminLogAction) {
   return '插件驳回'
 }
 
+=======
+>>>>>>> origin/qjw
 function App() {
   const [currentUser, setCurrentUser] = useState<LocalUser | null>(() => readCurrentUser())
   const [role, setRole] = useState<RoleId>(() => {
@@ -485,14 +520,18 @@ function App() {
   const [selectedTemplateId, setSelectedTemplateId] = useState(() => {
     return localStorage.getItem(selectedTemplateKey) ?? '0'
   })
+<<<<<<< HEAD
   const [pluginReviews, setPluginReviews] = useState<PluginReviewItem[]>(() => readPluginReviews())
   const [adminLogs, setAdminLogs] = useState<AdminOperationLog[]>(() => readAdminLogs())
+=======
+>>>>>>> origin/qjw
   const activeRole = currentUser?.role ?? role
 
   useEffect(() => {
     localStorage.setItem(roleKey, role)
   }, [role])
 
+<<<<<<< HEAD
   useEffect(() => {
     if (!currentUser) return
 
@@ -508,6 +547,8 @@ function App() {
     return () => window.clearTimeout(timer)
   }, [currentUser])
 
+=======
+>>>>>>> origin/qjw
   function selectTemplate(id: string) {
     if (!canApplyTemplate(activeRole)) return
     localStorage.setItem(selectedTemplateKey, id)
@@ -516,12 +557,16 @@ function App() {
 
   function signIn(user: LocalUser) {
     localStorage.setItem(currentUserKey, JSON.stringify(user))
+<<<<<<< HEAD
     localStorage.setItem(sessionExpiresAtKey, String(createSessionExpiry()))
+=======
+>>>>>>> origin/qjw
     setCurrentUser(user)
     setRole(user.role)
   }
 
   function signOut() {
+<<<<<<< HEAD
     clearStoredSession()
     setCurrentUser(null)
   }
@@ -550,6 +595,13 @@ function App() {
     })
   }
 
+=======
+    localStorage.removeItem(currentUserKey)
+    sessionStorage.removeItem(pageHistoryKey)
+    setCurrentUser(null)
+  }
+
+>>>>>>> origin/qjw
   return (
     <Routes>
       <Route path="/" element={<Navigate to={currentUser ? '/dashboard' : '/login'} replace />} />
@@ -629,6 +681,7 @@ function App() {
         path="/admin"
         element={
           currentUser && canManagePermissions(activeRole) ? (
+<<<<<<< HEAD
             <AdminManagementPage
               adminLogs={adminLogs}
               currentUserId={currentUser.id}
@@ -675,6 +728,9 @@ function App() {
               onLogout={signOut}
               onUpdatePluginReview={updatePluginReview}
             />
+=======
+            <AdminManagementPage role={activeRole} selectedTemplateId={selectedTemplateId} onLogout={signOut} />
+>>>>>>> origin/qjw
           ) : currentUser ? (
             <AccessDeniedPage role={activeRole} selectedTemplateId={selectedTemplateId} onLogout={signOut} />
           ) : (
@@ -705,11 +761,16 @@ function Shell({
   const [sidebarCollapsed, setSidebarCollapsed] = useState(() => {
     return localStorage.getItem(sidebarCollapsedKey) === 'true'
   })
+<<<<<<< HEAD
+=======
+  const [pageHistory, setPageHistory] = useState(() => readPageHistory())
+>>>>>>> origin/qjw
 
   useEffect(() => {
     localStorage.setItem(sidebarCollapsedKey, String(sidebarCollapsed))
   }, [sidebarCollapsed])
 
+<<<<<<< HEAD
   const pageHistory = useMemo(() => {
     const currentHistory = readPageHistory()
     if (!isTrackedPage(location.pathname)) return currentHistory
@@ -723,6 +784,25 @@ function Shell({
     const nextHistory = { entries, index: entries.length - 1 }
     writePageHistory(nextHistory)
     return nextHistory
+=======
+  useEffect(() => {
+    if (!isTrackedPage(location.pathname)) return
+
+    setPageHistory((currentHistory) => {
+      if (currentHistory.entries[currentHistory.index] === location.pathname) {
+        return currentHistory
+      }
+
+      const activeEntries =
+        currentHistory.index >= 0
+          ? currentHistory.entries.slice(0, currentHistory.index + 1)
+          : []
+      const entries = [...activeEntries, location.pathname].slice(-24)
+      const nextHistory = { entries, index: entries.length - 1 }
+      writePageHistory(nextHistory)
+      return nextHistory
+    })
+>>>>>>> origin/qjw
   }, [location.pathname])
 
   function handleLogout() {
@@ -739,6 +819,10 @@ function Shell({
 
     const nextHistory = { entries: currentHistory.entries, index: nextIndex }
     writePageHistory(nextHistory)
+<<<<<<< HEAD
+=======
+    setPageHistory(nextHistory)
+>>>>>>> origin/qjw
     navigate(target)
   }
 
@@ -793,6 +877,7 @@ function Shell({
             </span>
           )}
           {canManagePermissions(currentRole.id) && (
+<<<<<<< HEAD
             <>
               <Link to="/admin" title="权限管理">
                 <ShieldCheck size={18} />
@@ -808,6 +893,11 @@ function Shell({
             <Link to="/analyst" title="验收中心">
               <ClipboardCheck size={18} />
               <span className="nav-label">验收中心</span>
+=======
+            <Link to="/admin" title="权限管理">
+              <ShieldCheck size={18} />
+              <span className="nav-label">权限管理</span>
+>>>>>>> origin/qjw
             </Link>
           )}
         </nav>
@@ -873,7 +963,11 @@ function AuthVisual() {
       </div>
       <div className="login-copy">
         <h1>智能城市生成系统</h1>
+<<<<<<< HEAD
         <p>管理城市模板、角色权限和 Blender 插件入口的原型系统。</p>
+=======
+        <p>管理城市模板、角色权限和 Blender 插件入口的课程原型系统。</p>
+>>>>>>> origin/qjw
       </div>
     </section>
   )
@@ -1054,7 +1148,11 @@ function RegisterPage({
 
     const users = readUsers()
     const sameRoleUsers = users.filter((user) => user.role === role)
+<<<<<<< HEAD
     const usernameTaken = users.some(
+=======
+    const usernameTaken = sameRoleUsers.some(
+>>>>>>> origin/qjw
       (user) => normalizeIdentifier(user.username) === normalizeIdentifier(trimmedUsername),
     )
     const emailTaken = sameRoleUsers.some(
@@ -1062,11 +1160,19 @@ function RegisterPage({
     )
 
     if (usernameTaken) {
+<<<<<<< HEAD
       nextErrors.username = '账号名已经被注册，请更换；用户名在所有角色中都必须唯一'
     }
 
     if (emailTaken) {
       nextErrors.email = `该邮箱已经注册过${roleName(role)}，同一邮箱每个角色只能注册一次`
+=======
+      nextErrors.username = '该角色下账号名已经注册，请更换'
+    }
+
+    if (emailTaken) {
+      nextErrors.email = '该角色下邮箱已经注册，请更换'
+>>>>>>> origin/qjw
     }
 
     if (Object.keys(nextErrors).length) {
@@ -1177,7 +1283,11 @@ function RegisterPage({
   )
 }
 
+<<<<<<< HEAD
 function getDashboardView(role: RoleId) {
+=======
+function getDashboardView(role: RoleId, templateId: string) {
+>>>>>>> origin/qjw
   if (role === 'admin') {
     return {
       eyebrow: '管理员工作台',
@@ -1215,8 +1325,13 @@ function getDashboardView(role: RoleId) {
       eyebrow: '分析师工作台',
       title: '验收模板能力与插件演示链路',
       description: '分析师视图强调需求核对、验收评审和指标记录，用于支撑课程文档与演示说明。',
+<<<<<<< HEAD
       actionText: '进入验收中心',
       actionLink: '/analyst',
+=======
+      actionText: '查看模板指标',
+      actionLink: `/templates/${templateId}`,
+>>>>>>> origin/qjw
       workflowTitle: '验收与评审流程',
       steps: ['查看场景需求', '核对模板参数', '评审插件链路', '记录验收结论'],
       tasks: [
@@ -1283,7 +1398,11 @@ function DashboardPage({
   onLogout: () => void
 }) {
   const currentTemplate = getTemplate(selectedTemplateId)
+<<<<<<< HEAD
   const dashboardView = getDashboardView(role)
+=======
+  const dashboardView = getDashboardView(role, currentTemplate.id)
+>>>>>>> origin/qjw
 
   return (
     <Shell role={role} selectedTemplateId={selectedTemplateId} onLogout={onLogout}>
@@ -1686,6 +1805,7 @@ function AccessDeniedPage({
   )
 }
 
+<<<<<<< HEAD
 function AnalystAcceptancePage({
   pluginReviews,
   role,
@@ -1735,14 +1855,32 @@ function AnalystAcceptancePage({
     setMemoSaved(true)
     window.setTimeout(() => setMemoSaved(false), 1500)
   }
+=======
+function AdminManagementPage({
+  role,
+  selectedTemplateId,
+  onLogout,
+}: {
+  role: RoleId
+  selectedTemplateId: string
+  onLogout: () => void
+}) {
+  const users = readUsers()
+>>>>>>> origin/qjw
 
   return (
     <Shell role={role} selectedTemplateId={selectedTemplateId} onLogout={onLogout}>
       <section className="page-heading">
         <div>
+<<<<<<< HEAD
           <span className="eyebrow">分析师专属</span>
           <h1>标准制定、插件验收与行业需求备忘录</h1>
           <p>分析师先基于行业需求制定验收标准，再对插件提交物进行评审；通过后进入管理员上架审核队列。</p>
+=======
+          <span className="eyebrow">管理员专属</span>
+          <h1>用户权限管理与系统审核</h1>
+          <p>这里用本地用户库模拟后台管理能力，展示用户列表、角色权限、插件审核状态和系统运行状态。</p>
+>>>>>>> origin/qjw
         </div>
         <Link className="secondary-action" to="/dashboard">
           返回工作台
@@ -1750,6 +1888,7 @@ function AnalystAcceptancePage({
         </Link>
       </section>
 
+<<<<<<< HEAD
       <section className="analyst-layout">
         <div className="workspace-panel analyst-panel standards-panel">
           <div className="panel-head">
@@ -2095,10 +2234,23 @@ function AdminManagementPage({
             {users.length ? (
               users.map((user) => (
                 <div className="admin-user-row" key={user.id}>
+=======
+      <section className="admin-layout" id="admin-permissions">
+        <div className="workspace-panel admin-panel admin-users-panel">
+          <div className="panel-head">
+            <span className="eyebrow">用户列表</span>
+            <h2>本地注册用户</h2>
+          </div>
+          <ul className="admin-user-list">
+            {users.length ? (
+              users.map((user) => (
+                <li key={user.id}>
+>>>>>>> origin/qjw
                   <div>
                     <strong>{user.username}</strong>
                     <span>{user.email}</span>
                   </div>
+<<<<<<< HEAD
                   <label className="role-select-wrap">
                     <span>角色</span>
                     <select
@@ -2131,6 +2283,15 @@ function AdminManagementPage({
               <div className="empty-row">暂无注册用户</div>
             )}
           </div>
+=======
+                  <em>{roleLabel(user.role).replace('视图', '')}</em>
+                </li>
+              ))
+            ) : (
+              <li className="empty-row">暂无注册用户</li>
+            )}
+          </ul>
+>>>>>>> origin/qjw
         </div>
 
         <div className="workspace-panel admin-panel">
@@ -2143,8 +2304,37 @@ function AdminManagementPage({
 
         <div className="workspace-panel admin-panel">
           <div className="panel-head">
+<<<<<<< HEAD
             <span className="eyebrow">系统状态</span>
             <h2>后台运行概览</h2>
+=======
+            <span className="eyebrow">插件审核状态</span>
+            <h2>Blender 入口审核</h2>
+          </div>
+          <ul className="admin-status-list">
+            <li>
+              <BadgeCheck size={18} />
+              <span>入口路由</span>
+              <strong>仅建模师可访问</strong>
+            </li>
+            <li>
+              <BadgeCheck size={18} />
+              <span>模板参数</span>
+              <strong>字段已映射</strong>
+            </li>
+            <li>
+              <BadgeCheck size={18} />
+              <span>演示弹窗</span>
+              <strong>可模拟跳转</strong>
+            </li>
+          </ul>
+        </div>
+
+        <div className="workspace-panel admin-panel">
+          <div className="panel-head">
+            <span className="eyebrow">系统状态</span>
+            <h2>原型运行概览</h2>
+>>>>>>> origin/qjw
           </div>
           <div className="system-metric-grid">
             <span>
@@ -2156,6 +2346,7 @@ function AdminManagementPage({
               系统角色
             </span>
             <span>
+<<<<<<< HEAD
               <strong>ON</strong>
               用户名全局唯一
             </span>
@@ -2173,11 +2364,23 @@ function AdminManagementPage({
           </div>
           <AdminOperationLogPanel logs={adminLogs} />
         </div>
+=======
+              <strong>2</strong>
+              受限页面
+            </span>
+            <span>
+              <strong>ON</strong>
+              权限守卫
+            </span>
+          </div>
+        </div>
+>>>>>>> origin/qjw
       </section>
     </Shell>
   )
 }
 
+<<<<<<< HEAD
 function AdminAuditPage({
   adminLogs,
   pluginReviews,
@@ -2468,6 +2671,8 @@ function PluginDetailDrawer({ item, onClose }: { item: PluginReviewItem; onClose
   )
 }
 
+=======
+>>>>>>> origin/qjw
 function PermissionMatrix() {
   return (
     <div className="permission-matrix" aria-label="角色权限矩阵">

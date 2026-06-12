@@ -9,6 +9,10 @@ from __future__ import annotations
 import importlib
 import importlib.util
 import math
+<<<<<<< HEAD
+=======
+import random
+>>>>>>> origin/qjw
 from pathlib import Path
 
 import bpy
@@ -260,6 +264,118 @@ def vehicle_type_sequence(settings) -> list[str]:
     return sequence
 
 
+<<<<<<< HEAD
+=======
+def _randomized_route_cycle(route_count: int, rng: random.Random, randomness: float) -> list[int]:
+    route_indices = list(range(max(int(route_count), 0)))
+    if randomness > 0.0 and len(route_indices) > 1:
+        rng.shuffle(route_indices)
+    return route_indices
+
+
+def _choose_vehicle_route(
+    vehicle_type: str,
+    passenger_route_count: int,
+    bus_route_count: int,
+    route_cycles: dict[str, list[int]],
+    rng: random.Random,
+    randomness: float,
+) -> tuple[str, int] | None:
+    if vehicle_type == "BUS" and bus_route_count > 0:
+        route_kind = "bus"
+        route_count = bus_route_count
+    elif passenger_route_count > 0:
+        route_kind = "passenger"
+        route_count = passenger_route_count
+    elif bus_route_count > 0:
+        route_kind = "bus"
+        route_count = bus_route_count
+    else:
+        return None
+
+    if not route_cycles.get(route_kind):
+        route_cycles[route_kind] = _randomized_route_cycle(route_count, rng, randomness)
+    return route_kind, route_cycles[route_kind].pop(0)
+
+
+def _assign_route_phases(
+    assignments: list[dict],
+    *,
+    rng: random.Random,
+    randomness: float,
+    min_phase_gap: float,
+) -> None:
+    assignments_by_route: dict[tuple[str, int], list[dict]] = {}
+    for assignment in assignments:
+        key = (assignment["route_kind"], assignment["route_index"])
+        assignments_by_route.setdefault(key, []).append(assignment)
+
+    for route_assignments in assignments_by_route.values():
+        route_total = len(route_assignments)
+        if route_total == 1:
+            route_assignments[0]["phase_start"] = round((rng.random() * randomness) % 1.0, 6)
+            continue
+
+        cell_width = 1.0 / route_total
+        feasible_gap = min(max(float(min_phase_gap), 0.0), cell_width)
+        jitter_limit = max((cell_width - feasible_gap) * 0.5, 0.0) * randomness
+        route_origin = rng.random() * cell_width * randomness
+        for slot_index, assignment in enumerate(route_assignments):
+            phase = route_origin + slot_index * cell_width
+            if jitter_limit > 0.0:
+                phase += rng.uniform(-jitter_limit, jitter_limit)
+            assignment["phase_start"] = round(phase % 1.0, 6)
+
+
+def plan_vehicle_assignments(
+    sequence: list[str],
+    *,
+    passenger_route_count: int,
+    bus_route_count: int,
+    seed: int = 12,
+    randomness: float = 0.35,
+    min_phase_gap: float = 0.08,
+    scale_jitter: float = 0.06,
+) -> list[dict]:
+    """Create deterministic random vehicle route/phase/scale assignments."""
+    randomness = _clamp(float(randomness), 0.0, 1.0)
+    scale_jitter = _clamp(float(scale_jitter), 0.0, 0.25)
+    rng = random.Random(int(seed))
+    route_cycles: dict[str, list[int]] = {}
+    assignments: list[dict] = []
+
+    for vehicle_type in sequence:
+        route = _choose_vehicle_route(
+            vehicle_type,
+            max(int(passenger_route_count), 0),
+            max(int(bus_route_count), 0),
+            route_cycles,
+            rng,
+            randomness,
+        )
+        if route is None:
+            continue
+
+        route_kind, route_index = route
+        if scale_jitter > 0.0 and randomness > 0.0:
+            scale_factor = 1.0 + rng.uniform(-scale_jitter, scale_jitter) * randomness
+        else:
+            scale_factor = 1.0
+        assignments.append(
+            {
+                "vehicle_type": vehicle_type,
+                "route_kind": route_kind,
+                "route_index": route_index,
+                "phase_start": 0.0,
+                "scale_factor": round(scale_factor, 6),
+            }
+        )
+
+    _assign_route_phases(assignments, rng=rng, randomness=randomness, min_phase_gap=min_phase_gap)
+    return assignments
+
+
+>>>>>>> origin/qjw
 def clear_traffic() -> None:
     collection = bpy.data.collections.get(TRAFFIC_ROOT_COLLECTION)
     if collection is not None:
@@ -636,6 +752,331 @@ def _create_collection_vehicle_follower(
     return root_clone
 
 
+<<<<<<< HEAD
+=======
+def _manifest_object_asset(asset_id: str) -> dict | None:
+    try:
+        manifest = asset_registry.load_manifest()
+        return asset_registry.get_object_asset(manifest, asset_id)
+    except Exception:
+        return None
+
+
+def bundled_vehicle_asset_id(vehicle_type: str) -> str | None:
+    return TRAFFIC_BUNDLED_VEHICLE_ASSET_IDS.get(vehicle_type)
+
+
+def bundled_vehicle_profile(vehicle_type: str) -> dict:
+    profile = dict(TRAFFIC_BUNDLED_VEHICLE_DEFAULTS)
+    asset_id = bundled_vehicle_asset_id(vehicle_type)
+    if asset_id is None:
+        return profile
+
+    asset = _manifest_object_asset(asset_id) or {}
+    for key in tuple(profile.keys()):
+        if key in asset:
+            profile[key] = asset[key]
+    return profile
+
+
+def _lerp_point(a: Vector, b: Vector, factor: float) -> Vector:
+    return a * (1.0 - factor) + b * factor
+
+
+def _resample_polyline(points: list[Vector], spacing: float) -> list[Vector]:
+    if len(points) <= 2:
+        return [_copy_vector(point) for point in points]
+
+    spacing = max(float(spacing), 0.1)
+    result = [_copy_vector(points[0])]
+    remaining = spacing
+    current = _copy_vector(points[0])
+
+    for next_point in points[1:]:
+        segment_start = current
+        segment_end = _copy_vector(next_point)
+        segment = segment_end - segment_start
+        segment_length = segment.length
+
+        while segment_length >= remaining and segment_length > 0.0:
+            factor = remaining / segment_length
+            sample = _lerp_point(segment_start, segment_end, factor)
+            result.append(sample)
+            segment_start = sample
+            segment = segment_end - segment_start
+            segment_length = segment.length
+            remaining = spacing
+
+        remaining -= segment_length
+        current = segment_end
+
+    if not _vector_equals(result[-1], points[-1]):
+        result.append(_copy_vector(points[-1]))
+    return result
+
+
+def _smooth_open_polyline(points: list[Vector], iterations: int) -> list[Vector]:
+    smoothed = [_copy_vector(point) for point in points]
+    for _ in range(max(int(iterations), 0)):
+        if len(smoothed) <= 2:
+            break
+        refined = [_copy_vector(smoothed[0])]
+        for index in range(len(smoothed) - 1):
+            start = smoothed[index]
+            end = smoothed[index + 1]
+            q_point = start * 0.75 + end * 0.25
+            r_point = start * 0.25 + end * 0.75
+            if index == 0:
+                refined.append(r_point)
+            elif index == len(smoothed) - 2:
+                refined.append(q_point)
+            else:
+                refined.extend((q_point, r_point))
+        refined.append(_copy_vector(smoothed[-1]))
+        smoothed = refined
+    return smoothed
+
+
+def _cross_2d(a: Vector, b: Vector) -> float:
+    return a.x * b.y - a.y * b.x
+
+
+def _dot_2d(a: Vector, b: Vector) -> float:
+    return a.x * b.x + a.y * b.y
+
+
+def _rounded_corner_points(
+    previous_point: Vector,
+    corner_point: Vector,
+    next_point: Vector,
+    radius: float,
+    segments: int,
+    max_angle_deg: float,
+) -> list[Vector]:
+    incoming = corner_point - previous_point
+    outgoing = next_point - corner_point
+    incoming_length = incoming.length
+    outgoing_length = outgoing.length
+    if incoming_length == 0.0 or outgoing_length == 0.0:
+        return [_copy_vector(corner_point)]
+
+    incoming_dir = incoming * (1.0 / incoming_length)
+    outgoing_dir = outgoing * (1.0 / outgoing_length)
+    turn_cos = _clamp(_dot_2d(incoming_dir, outgoing_dir), -1.0, 1.0)
+    angle_deg = math.degrees(math.acos(turn_cos))
+    if angle_deg <= 1.0 or angle_deg >= float(max_angle_deg):
+        return [_copy_vector(corner_point)]
+
+    trim_distance = min(float(radius), incoming_length * 0.35, outgoing_length * 0.35)
+    if trim_distance <= 1e-5:
+        return [_copy_vector(corner_point)]
+
+    entry_point = corner_point - incoming_dir * trim_distance
+    exit_point = corner_point + outgoing_dir * trim_distance
+
+    incoming_normal = Vector((-incoming_dir.y, incoming_dir.x, 0.0))
+    outgoing_normal = Vector((-outgoing_dir.y, outgoing_dir.x, 0.0))
+    turn_sign = 1.0 if _cross_2d(incoming_dir, outgoing_dir) >= 0.0 else -1.0
+    incoming_normal = incoming_normal * turn_sign
+    outgoing_normal = outgoing_normal * turn_sign
+
+    center = None
+    determinant = _cross_2d(incoming_normal, outgoing_normal)
+    if abs(determinant) > 1e-5:
+        delta = exit_point - entry_point
+        t_value = _cross_2d(delta, outgoing_normal) / determinant
+        center = entry_point + incoming_normal * t_value
+
+    if center is None:
+        return [entry_point, exit_point]
+
+    start_angle = math.atan2(entry_point.y - center.y, entry_point.x - center.x)
+    end_angle = math.atan2(exit_point.y - center.y, exit_point.x - center.x)
+
+    if turn_sign > 0.0 and end_angle <= start_angle:
+        end_angle += math.tau
+    elif turn_sign < 0.0 and end_angle >= start_angle:
+        end_angle -= math.tau
+
+    arc_points = [entry_point]
+    total_segments = max(int(segments), 2)
+    for step in range(1, total_segments):
+        factor = step / total_segments
+        angle = start_angle + (end_angle - start_angle) * factor
+        arc_points.append(Vector((center.x + math.cos(angle) * trim_distance, center.y + math.sin(angle) * trim_distance, corner_point.z)))
+    arc_points.append(exit_point)
+    return arc_points
+
+
+def _round_sharp_corners(
+    points: list[Vector],
+    radius: float,
+    segments: int,
+    max_angle_deg: float,
+) -> list[Vector]:
+    if len(points) <= 2 or radius <= 0.0:
+        return [_copy_vector(point) for point in points]
+
+    rounded = [_copy_vector(points[0])]
+    for index in range(1, len(points) - 1):
+        arc_points = _rounded_corner_points(
+            points[index - 1],
+            points[index],
+            points[index + 1],
+            radius,
+            segments,
+            max_angle_deg,
+        )
+        rounded.extend(arc_points)
+    rounded.append(_copy_vector(points[-1]))
+    return rounded
+
+
+def prepare_vehicle_path(
+    chain: list[Vector],
+    *,
+    lane_offset: float,
+    sample_spacing: float,
+    smoothing_iterations: int,
+    corner_rounding_radius: float,
+    corner_rounding_segments: int,
+    corner_max_angle_deg: float,
+) -> list[Vector]:
+    if len(chain) <= 2:
+        if abs(lane_offset) > 1e-6:
+            return _offset_chain(chain, lane_offset)
+        return [_copy_vector(point) for point in chain]
+
+    prepared = _offset_chain(chain, lane_offset) if abs(lane_offset) > 1e-6 else [_copy_vector(point) for point in chain]
+    prepared = _round_sharp_corners(
+        prepared,
+        float(corner_rounding_radius),
+        int(corner_rounding_segments),
+        float(corner_max_angle_deg),
+    )
+    prepared = _resample_polyline(prepared, sample_spacing)
+    prepared = _smooth_open_polyline(prepared, smoothing_iterations)
+    return _resample_polyline(prepared, sample_spacing)
+
+
+def _append_collection_hierarchy(manifest: dict, asset: dict, collection) -> dict:
+    object_path = asset_registry.resolve_asset_path(manifest, asset)
+    if not object_path.exists():
+        raise asset_registry.AssetRegistryError(f"object file does not exist: {object_path}")
+
+    target_kind, target_name = asset_registry.blend_asset_target(asset)
+    if target_kind != "collection":
+        raise asset_registry.AssetRegistryError(f"traffic vehicle asset must use collection target: {asset.get('id', '')}")
+
+    with bpy.data.libraries.load(str(object_path), link=False) as (data_from, data_to):
+        if target_name not in data_from.collections:
+            raise asset_registry.AssetRegistryError(f"collection {target_name} not found in {object_path}")
+        data_to.collections = [target_name]
+
+    appended_collection = data_to.collections[0]
+    collection.children.link(appended_collection)
+
+    members = list(appended_collection.objects)
+    root_name = str(asset.get("object_name", "")).strip()
+    root = next((obj for obj in members if obj.name == root_name), None)
+    if root is None:
+        root = next((obj for obj in members if obj.parent is None), None)
+    if root is None:
+        raise asset_registry.AssetRegistryError(f"collection asset has no usable root object: {asset.get('id', '')}")
+
+    for obj in members:
+        obj.hide_render = True
+        obj.hide_viewport = True
+        obj.hide_select = True
+
+    return {"collection": appended_collection, "root": root, "members": members}
+
+
+def _load_bundled_vehicle_template(vehicle_type: str, collection):
+    asset_id = bundled_vehicle_asset_id(vehicle_type)
+    if asset_id is None:
+        return None
+
+    try:
+        manifest = asset_registry.load_manifest()
+        asset = asset_registry.get_object_asset(manifest, asset_id)
+        return _append_collection_hierarchy(manifest, asset, collection)
+    except Exception:
+        return None
+
+
+def _copy_hierarchy_member(source, name: str):
+    obj = source.copy()
+    if getattr(source, "animation_data", None) is not None:
+        obj.animation_data_clear()
+    obj.name = name
+    return obj
+
+
+def _create_collection_vehicle_follower(
+    *,
+    name: str,
+    collection,
+    vehicle_type: str,
+    template: dict,
+    path_obj,
+    frame_start: int,
+    frame_end: int,
+    phase_start: float,
+    scale: float,
+    rotation_z_correction: float,
+    ground_offset: float,
+) -> bpy.types.Object:
+    carrier = bpy.data.objects.new(f"{name}_Carrier", None)
+    carrier.empty_display_type = "PLAIN_AXES"
+    carrier.empty_display_size = 0.12
+    carrier.hide_render = True
+    carrier.hide_select = True
+    collection.objects.link(carrier)
+
+    path_points_world = [Vector((point.co.x, point.co.y, point.co.z)) for point in path_obj.data.splines[0].points]
+    ecology_common.keyframe_path_motion(
+        carrier,
+        path_points_world,
+        path_obj.location,
+        frame_start,
+        frame_end,
+        phase_start,
+        sample_count=max(12, len(path_points_world)),
+    )
+
+    duplicates = {}
+    root_source = template["root"]
+    root_clone = None
+    for source in template["members"]:
+        clone = _copy_hierarchy_member(source, f"{name}_{source.name}")
+        collection.objects.link(clone)
+        clone.hide_render = False
+        clone.hide_viewport = False
+        clone.hide_select = False
+        duplicates[source] = clone
+        if source == root_source:
+            root_clone = clone
+
+    if root_clone is None:
+        raise RuntimeError(f"Vehicle template root missing for {vehicle_type}")
+
+    for source, clone in duplicates.items():
+        parent = source.parent
+        if parent in duplicates:
+            clone.parent = duplicates[parent]
+        else:
+            clone.parent = carrier
+        if hasattr(source, "matrix_parent_inverse") and hasattr(source.matrix_parent_inverse, "copy"):
+            clone.matrix_parent_inverse = source.matrix_parent_inverse.copy()
+
+    root_clone.location = Vector((0.0, 0.0, ground_offset))
+    root_clone.rotation_euler = (0.0, 0.0, rotation_z_correction)
+    root_clone.scale = (scale, scale, scale)
+    return root_clone
+
+
+>>>>>>> origin/qjw
 def _vehicle_mesh(vehicle_type: str, scale: float) -> tuple[list[tuple[float, float, float]], list[tuple[int, ...]]]:
     if vehicle_type == "BUS":
         vertices = [
@@ -778,6 +1219,7 @@ def _generate_vehicles(settings, path_collection, vehicle_collection, surface_po
     )
 
     sequence = vehicle_type_sequence(settings)
+<<<<<<< HEAD
     total = max(len(sequence), 1)
     base_vehicle_scale = _clamp(getattr(settings, "vehicle_scale", 0.78), 0.3, 2.4)
     bus_scale = _clamp(getattr(settings, "bus_scale", 1.18), 0.5, 3.0)
@@ -787,6 +1229,32 @@ def _generate_vehicles(settings, path_collection, vehicle_collection, surface_po
         phase = index / total
         path_obj = path_outer if vehicle_type == "BUS" else path_inner
         mesh_scale = bus_scale if vehicle_type == "BUS" else base_vehicle_scale
+=======
+    base_vehicle_scale = _clamp(getattr(settings, "vehicle_scale", 0.78), 0.3, 2.4)
+    bus_scale = _clamp(getattr(settings, "bus_scale", 1.18), 0.5, 3.0)
+    vehicle_templates: dict[str, dict | None] = {}
+    assignments = plan_vehicle_assignments(
+        sequence,
+        passenger_route_count=1,
+        bus_route_count=1,
+        seed=getattr(settings, "traffic_random_seed", 12),
+        randomness=getattr(settings, "traffic_randomness", 0.35),
+        scale_jitter=getattr(settings, "vehicle_scale_jitter", 0.06),
+    )
+    path_pools = {
+        "passenger": [path_inner],
+        "bus": [path_outer],
+    }
+
+    for index, assignment in enumerate(assignments):
+        vehicle_type = assignment["vehicle_type"]
+        path_pool = path_pools.get(assignment["route_kind"], [])
+        if not path_pool:
+            continue
+        path_obj = path_pool[assignment["route_index"] % len(path_pool)]
+        mesh_scale = bus_scale if vehicle_type == "BUS" else base_vehicle_scale
+        mesh_scale *= float(assignment["scale_factor"])
+>>>>>>> origin/qjw
         profile = bundled_vehicle_profile(vehicle_type)
         template = vehicle_templates.get(vehicle_type)
         if vehicle_type not in vehicle_templates:
@@ -802,7 +1270,11 @@ def _generate_vehicles(settings, path_collection, vehicle_collection, surface_po
                 path_obj=path_obj,
                 frame_start=frame_start,
                 frame_end=frame_end,
+<<<<<<< HEAD
                 phase_start=phase,
+=======
+                phase_start=float(assignment["phase_start"]),
+>>>>>>> origin/qjw
                 scale=mesh_scale * float(profile["scale_ratio"]),
                 rotation_z_correction=float(profile["rotation_z_correction"]),
                 ground_offset=float(profile["ground_offset"]),
@@ -819,7 +1291,11 @@ def _generate_vehicles(settings, path_collection, vehicle_collection, surface_po
             path_obj=path_obj,
             frame_start=frame_start,
             frame_end=frame_end,
+<<<<<<< HEAD
             phase_start=phase,
+=======
+            phase_start=float(assignment["phase_start"]),
+>>>>>>> origin/qjw
             bobbing=(0.02, 0.05),
         )
 
@@ -858,6 +1334,7 @@ def _generate_vehicles_on_road_paths(settings, path_collection, vehicle_collecti
     bus_route_paths = []
     lane_offset = abs(float(passenger_profile["lane_offset"]))
     passenger_offsets = (lane_offset, -lane_offset) if lane_offset > 1e-6 else (0.0,)
+<<<<<<< HEAD
 
     for route_index, road_path in enumerate(road_paths):
         prepared_bus_path = prepare_vehicle_path(
@@ -879,6 +1356,50 @@ def _generate_vehicles_on_road_paths(settings, path_collection, vehicle_collecti
                 frame_count,
             )
             bus_route_paths.append(path_obj)
+=======
+    bus_lane_offset = abs(float(bus_profile["lane_offset"]))
+    if bus_lane_offset <= 1e-6:
+        bus_lane_offset = lane_offset
+    bus_offsets = (bus_lane_offset, -bus_lane_offset) if bus_lane_offset > 1e-6 else (0.0,)
+
+    def create_vehicle_path(name: str, motion_points: list[Vector], pool: list) -> None:
+        if len(motion_points) < 2:
+            return
+        path_obj = ecology_common.create_follow_path(
+            name,
+            motion_points,
+            path_collection,
+            Vector((0.0, 0.0, 0.0)),
+            frame_count,
+        )
+        pool.append(path_obj)
+
+    for route_index, road_path in enumerate(road_paths):
+        for bus_lane_index, offset in enumerate(bus_offsets):
+            prepared_bus_path = prepare_vehicle_path(
+                road_path,
+                lane_offset=offset,
+                sample_spacing=float(bus_profile["sample_spacing"]),
+                smoothing_iterations=int(bus_profile["smoothing_iterations"]),
+                corner_rounding_radius=float(bus_profile["corner_rounding_radius"]),
+                corner_rounding_segments=int(bus_profile["corner_rounding_segments"]),
+                corner_max_angle_deg=float(bus_profile["corner_max_angle_deg"]),
+            )
+            bus_motion_points = vehicle_motion_points_from_chain(prepared_bus_path)
+            bus_reverse_motion_points = vehicle_motion_points_from_chain(list(reversed(prepared_bus_path)))
+            if bus_lane_index % 2 == 1:
+                create_vehicle_path(
+                    f"ICITY_TRAFFIC_RoadPath_Bus_{route_index + 1}_Lane_{bus_lane_index + 1}_Reverse",
+                    bus_reverse_motion_points,
+                    bus_route_paths,
+                )
+            else:
+                create_vehicle_path(
+                    f"ICITY_TRAFFIC_RoadPath_Bus_{route_index + 1}_Lane_{bus_lane_index + 1}",
+                    bus_motion_points,
+                    bus_route_paths,
+                )
+>>>>>>> origin/qjw
 
         for lane_index, offset in enumerate(passenger_offsets):
             prepared_path = prepare_vehicle_path(
@@ -891,6 +1412,7 @@ def _generate_vehicles_on_road_paths(settings, path_collection, vehicle_collecti
                 corner_max_angle_deg=float(passenger_profile["corner_max_angle_deg"]),
             )
             motion_points = vehicle_motion_points_from_chain(prepared_path)
+<<<<<<< HEAD
             if len(motion_points) < 2:
                 continue
             path_obj = ecology_common.create_follow_path(
@@ -901,10 +1423,26 @@ def _generate_vehicles_on_road_paths(settings, path_collection, vehicle_collecti
                 frame_count,
             )
             passenger_route_paths.append(path_obj)
+=======
+            reverse_motion_points = vehicle_motion_points_from_chain(list(reversed(prepared_path)))
+            if lane_index % 2 == 1:
+                create_vehicle_path(
+                    f"ICITY_TRAFFIC_RoadPath_{route_index + 1}_Lane_{lane_index + 1}_Reverse",
+                    reverse_motion_points,
+                    passenger_route_paths,
+                )
+            else:
+                create_vehicle_path(
+                    f"ICITY_TRAFFIC_RoadPath_{route_index + 1}_Lane_{lane_index + 1}",
+                    motion_points,
+                    passenger_route_paths,
+                )
+>>>>>>> origin/qjw
 
     if not passenger_route_paths and not bus_route_paths:
         return
 
+<<<<<<< HEAD
     total = max(len(sequence), 1)
     vehicle_templates: dict[str, dict | None] = {}
     for index, vehicle_type in enumerate(sequence):
@@ -913,6 +1451,29 @@ def _generate_vehicles_on_road_paths(settings, path_collection, vehicle_collecti
             continue
         path_obj = path_pool[index % len(path_pool)]
         mesh_scale = bus_scale if vehicle_type == "BUS" else base_vehicle_scale
+=======
+    vehicle_templates: dict[str, dict | None] = {}
+    assignments = plan_vehicle_assignments(
+        sequence,
+        passenger_route_count=len(passenger_route_paths),
+        bus_route_count=len(bus_route_paths),
+        seed=getattr(settings, "traffic_random_seed", 12),
+        randomness=getattr(settings, "traffic_randomness", 0.35),
+        scale_jitter=getattr(settings, "vehicle_scale_jitter", 0.06),
+    )
+    path_pools = {
+        "passenger": passenger_route_paths,
+        "bus": bus_route_paths,
+    }
+    for index, assignment in enumerate(assignments):
+        vehicle_type = assignment["vehicle_type"]
+        path_pool = path_pools.get(assignment["route_kind"], [])
+        if not path_pool:
+            continue
+        path_obj = path_pool[assignment["route_index"] % len(path_pool)]
+        mesh_scale = bus_scale if vehicle_type == "BUS" else base_vehicle_scale
+        mesh_scale *= float(assignment["scale_factor"])
+>>>>>>> origin/qjw
         profile = bundled_vehicle_profile(vehicle_type)
         template = vehicle_templates.get(vehicle_type)
         if vehicle_type not in vehicle_templates:
@@ -928,7 +1489,11 @@ def _generate_vehicles_on_road_paths(settings, path_collection, vehicle_collecti
                 path_obj=path_obj,
                 frame_start=frame_start,
                 frame_end=frame_end,
+<<<<<<< HEAD
                 phase_start=index / total,
+=======
+                phase_start=float(assignment["phase_start"]),
+>>>>>>> origin/qjw
                 scale=mesh_scale * float(profile["scale_ratio"]),
                 rotation_z_correction=float(profile["rotation_z_correction"]),
                 ground_offset=float(profile["ground_offset"]),
@@ -945,7 +1510,11 @@ def _generate_vehicles_on_road_paths(settings, path_collection, vehicle_collecti
             path_obj=path_obj,
             frame_start=frame_start,
             frame_end=frame_end,
+<<<<<<< HEAD
             phase_start=index / total,
+=======
+            phase_start=float(assignment["phase_start"]),
+>>>>>>> origin/qjw
             bobbing=(0.02, 0.05),
         )
 
@@ -994,6 +1563,12 @@ class ICITY_TrafficSettings(PropertyGroup):
     walkway_width: FloatProperty(name="Walkway Width", default=1.8, min=0.8, max=6.0)
     vehicle_scale: FloatProperty(name="Vehicle Scale", default=0.78, min=0.3, max=2.4)
     bus_scale: FloatProperty(name="Bus Scale", default=1.18, min=0.5, max=3.0)
+<<<<<<< HEAD
+=======
+    traffic_random_seed: IntProperty(name="Random Seed", default=12, min=0, max=999999)
+    traffic_randomness: FloatProperty(name="Randomness", default=0.35, min=0.0, max=1.0)
+    vehicle_scale_jitter: FloatProperty(name="Scale Jitter", default=0.06, min=0.0, max=0.25)
+>>>>>>> origin/qjw
 
 
 class ICITY_OT_GenerateTraffic(Operator):
@@ -1066,6 +1641,15 @@ class ICITY_PT_TrafficPanel(Panel):
         scale_box.label(text="Scale", icon="EMPTY_AXIS")
         scale_box.prop(settings, "vehicle_scale")
         scale_box.prop(settings, "bus_scale")
+<<<<<<< HEAD
+=======
+        scale_box.prop(settings, "vehicle_scale_jitter")
+
+        random_box = layout.box()
+        random_box.label(text="Randomness", icon="MOD_NOISE")
+        random_box.prop(settings, "traffic_random_seed")
+        random_box.prop(settings, "traffic_randomness")
+>>>>>>> origin/qjw
 
         anim_box = layout.box()
         anim_box.label(text="Animation", icon="TIME")
