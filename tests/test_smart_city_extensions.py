@@ -101,19 +101,11 @@ def install_blender_stubs(vector_cls=Vector):
     bpy.context = types.SimpleNamespace()
 
     props = types.ModuleType("bpy.props")
-<<<<<<< HEAD
-    for name in ("BoolProperty", "EnumProperty", "FloatProperty", "IntProperty", "PointerProperty"):
-        setattr(props, name, lambda *args, **kwargs: None)
-
-    bpy_types = types.ModuleType("bpy.types")
-    for name in ("Operator", "Panel", "PropertyGroup", "Collection", "Object", "Material", "Action", "Node"):
-=======
     for name in ("BoolProperty", "CollectionProperty", "EnumProperty", "FloatProperty", "IntProperty", "PointerProperty", "StringProperty"):
         setattr(props, name, lambda *args, **kwargs: None)
 
     bpy_types = types.ModuleType("bpy.types")
     for name in ("Operator", "Panel", "PropertyGroup", "UIList", "Collection", "Object", "Material", "Action", "Node"):
->>>>>>> origin/qjw
         setattr(bpy_types, name, type(name, (), {}))
 
     mathutils = types.ModuleType("mathutils")
@@ -172,8 +164,6 @@ class SmartCityExtensionTests(unittest.TestCase):
         self.assertEqual(sequence.count("BUS"), 1)
         self.assertEqual(sequence[0], "BUS")
 
-<<<<<<< HEAD
-=======
     def test_plan_vehicle_assignments_uses_seeded_route_randomness(self):
         traffic_extension = load_module("traffic_extension_vehicle_random_routes", "iCity/smart_city/traffic_extension.py")
         sequence = ["BUS", "TAXI", "CAR", "CAR", "TAXI", "CAR", "CAR", "BUS"]
@@ -239,7 +229,6 @@ class SmartCityExtensionTests(unittest.TestCase):
         self.assertTrue(any(phase not in {0.0, 0.2, 0.4, 0.6, 0.8} for phase in phases))
         self.assertTrue(all(item["scale_factor"] == 1.0 for item in assignments))
 
->>>>>>> origin/qjw
     def test_clear_traffic_module_only_removes_traffic_collections(self):
         traffic_extension = load_module("traffic_extension_clear", "iCity/smart_city/traffic_extension.py")
         calls = []
@@ -296,8 +285,6 @@ class SmartCityExtensionTests(unittest.TestCase):
         self.assertEqual(len(chains), 1)
         self.assertEqual([(point.x, point.y, point.z) for point in chains[0]], [(0.0, 0.0, 0.0), (5.0, 0.0, 0.0), (10.0, 0.0, 0.0)])
 
-<<<<<<< HEAD
-=======
     def test_layout_contract_inspector_reports_mesh_attributes(self):
         layout_control = load_module("layout_control_contract", "iCity/smart_city/layout_control.py")
 
@@ -1079,7 +1066,6 @@ class SmartCityExtensionTests(unittest.TestCase):
         self.assertEqual(len(graph["nodes"]), 4)
         self.assertEqual(len(graph["edges"]), 4)
 
->>>>>>> origin/qjw
     def test_vehicle_motion_points_from_open_chain_ping_pong_without_shortcut(self):
         traffic_extension = load_module("traffic_extension_pingpong", "iCity/smart_city/traffic_extension.py")
 
@@ -1134,8 +1120,6 @@ class SmartCityExtensionTests(unittest.TestCase):
         self.assertEqual(generated, [("vehicles", 1)])
         self.assertEqual(frame_calls, [1])
 
-<<<<<<< HEAD
-=======
     def test_load_bundled_vehicle_template_supports_bus_asset(self):
         traffic_extension = load_module("traffic_extension_bus_template", "iCity/smart_city/traffic_extension.py")
         manifest = {"objects": []}
@@ -1426,7 +1410,6 @@ class SmartCityExtensionTests(unittest.TestCase):
         self.assertEqual(profile["corner_rounding_segments"], 7)
         self.assertAlmostEqual(profile["corner_max_angle_deg"], 135.0)
 
->>>>>>> origin/qjw
     def test_clear_streetlights_only_removes_generated_collection(self):
         asset_extension = load_module("asset_extension_clear_streetlights", "iCity/smart_city/asset_extension.py")
         calls = []
@@ -1774,18 +1757,12 @@ class SmartCityExtensionTests(unittest.TestCase):
 
         self.assertIn("roadside_asset", categories)
         self.assertIn("ecology_asset", categories)
-<<<<<<< HEAD
-        self.assertIn("dock_pier_proc_01", object_ids)
-        self.assertIn("tree_cluster_proc_01", object_ids)
-        self.assertIn("shrub_patch_proc_01", object_ids)
-=======
         self.assertIn("traffic_vehicle", categories)
         self.assertIn("dock_pier_proc_01", object_ids)
         self.assertIn("tree_cluster_proc_01", object_ids)
         self.assertIn("shrub_patch_proc_01", object_ids)
         self.assertIn("vehicle_chevrolet_m1009_01", object_ids)
         self.assertIn("vehicle_lowpoly_bus_01", object_ids)
->>>>>>> origin/qjw
 
 
 if __name__ == "__main__":

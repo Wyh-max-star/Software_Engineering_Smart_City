@@ -21,3 +21,4 @@ iCity/smart_city/manifests/llm_key.txt
 frontend/node_modules/
 frontend/dist/
 frontend/*.log
+.gitattributes

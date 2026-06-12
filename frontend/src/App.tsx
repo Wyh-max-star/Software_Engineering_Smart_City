@@ -2,27 +2,20 @@ import {
   ArrowRight,
   BadgeCheck,
   BarChart3,
-<<<<<<< HEAD
   BookOpenCheck,
-=======
->>>>>>> origin/qjw
   Boxes,
   Building2,
   CheckCircle2,
   ChevronLeft,
   ChevronRight,
-<<<<<<< HEAD
   ClipboardCheck,
   ClipboardList,
-=======
->>>>>>> origin/qjw
   DoorOpen,
   ExternalLink,
   LayoutDashboard,
   LogOut,
   Menu,
   MonitorPlay,
-<<<<<<< HEAD
   Plus,
   PlugZap,
   Save,
@@ -34,14 +27,6 @@ import {
   Trees,
   UserRoundCog,
   XCircle,
-=======
-  PlugZap,
-  Search,
-  ShieldCheck,
-  Store,
-  Trees,
-  UserRoundCog,
->>>>>>> origin/qjw
 } from 'lucide-react'
 import { useEffect, useMemo, useState, type FormEvent, type ReactNode } from 'react'
 import { Link, Navigate, Route, Routes, useLocation, useNavigate, useParams } from 'react-router-dom'
@@ -52,7 +37,6 @@ const selectedTemplateKey = 'icity-selected-template'
 const roleKey = 'icity-current-role'
 const usersKey = 'icity-local-users'
 const currentUserKey = 'icity-current-user'
-<<<<<<< HEAD
 const sessionExpiresAtKey = 'icity-session-expires-at'
 const sidebarCollapsedKey = 'icity-sidebar-collapsed'
 const pageHistoryKey = 'icity-page-history'
@@ -60,11 +44,10 @@ const pluginReviewsKey = 'icity-plugin-review-items'
 const acceptanceStandardsKey = 'icity-acceptance-standards'
 const industryMemoKey = 'icity-industry-demand-memo'
 const adminLogsKey = 'icity-admin-operation-logs'
+const rememberedLoginMethodKey = 'icity-remembered-login-method'
+const rememberedEmailLoginKey = 'icity-remembered-email-login'
+const rememberedUsernameLoginKey = 'icity-remembered-username-login'
 const sessionDurationMs = 12 * 60 * 60 * 1000
-=======
-const sidebarCollapsedKey = 'icity-sidebar-collapsed'
-const pageHistoryKey = 'icity-page-history'
->>>>>>> origin/qjw
 
 type LocalUser = {
   id: string
@@ -76,7 +59,12 @@ type LocalUser = {
 }
 
 type LoginMethod = 'email' | 'username'
-<<<<<<< HEAD
+type RememberedLogin = {
+  rememberIdentifier: boolean
+  identifier: string
+  rememberPassword: boolean
+  password: string
+}
 type AnalystReviewStatus = 'pending' | 'passed' | 'changes_requested'
 type AdminReviewStatus = 'waiting_analyst' | 'pending' | 'listed' | 'rejected'
 type PluginReviewAction = (id: string, updater: (item: PluginReviewItem) => PluginReviewItem) => void
@@ -86,8 +74,6 @@ type AdminLogInput = {
   target: string
   detail: string
 }
-=======
->>>>>>> origin/qjw
 type PermissionKey =
   | 'viewTemplates'
   | 'applyTemplate'
@@ -96,7 +82,6 @@ type PermissionKey =
   | 'reviewPlugin'
   | 'recordAcceptance'
 
-<<<<<<< HEAD
 type PluginReviewItem = {
   id: string
   name: string
@@ -223,8 +208,119 @@ const defaultIndustryMemo: IndustryDemandMemo = {
   ].join('\n'),
 }
 
-=======
->>>>>>> origin/qjw
+const naturalLanguageDemos = [
+  {
+    id: 'busy-lake',
+    command: '车水马龙、有山有湖、街上很多人，把树换成金黄的',
+    engine: 'DeepSeek 优先 / 规则兜底',
+    result: [
+      ['tree', 'Tree7_Tree_ICity_Default'],
+      ['traffic', 'high'],
+      ['pedestrian', 'high'],
+      ['ecology_mode', 'LAKE_RING'],
+    ],
+    effects: ['金黄行道树', '高密度车流', '高密度人群', '湖光山色生态地块'],
+    operators: ['icity.apply_nl_command', 'sna.road_apply_5c3ab', 'icity.generate_traffic', 'icity.generate_pedestrians', 'icity.add_ecology_plot'],
+  },
+  {
+    id: 'coast-boardwalk',
+    command: '海边木栈道，棕榈树，中等车流，路边放木质长椅',
+    engine: 'DeepSeek 优先 / 规则兜底',
+    result: [
+      ['tree', 'Tree14_Tree_ICity_Default'],
+      ['bench', 'Bench1_Bench_ICity_Default'],
+      ['surface', 'BOARDWALK_WARM'],
+      ['traffic', 'medium'],
+    ],
+    effects: ['棕榈行道树', '暖色木栈道', '中等车流', '木质长椅'],
+    operators: ['icity.apply_nl_command', 'sna.road_apply_5c3ab', 'icity.apply_asset_surface', 'icity.generate_traffic'],
+  },
+  {
+    id: 'quiet-clear',
+    command: '去掉车辆和人群，清空山湖，改成安静干净的公园街区',
+    engine: '规则解析可离线执行',
+    result: [
+      ['road_material', 'ICity_Road 4 clean_Default'],
+      ['traffic', 'none'],
+      ['pedestrian', 'none'],
+      ['ecology_mode', 'NONE'],
+    ],
+    effects: ['干净路面', '清空车流', '清空人群', '移除生态地块'],
+    operators: ['icity.apply_nl_command', 'sna.road_apply_5c3ab', 'icity.clear_traffic', 'icity.clear_pedestrians', 'icity.clear_ecology'],
+  },
+]
+
+const layoutSamples = [
+  {
+    id: 'rectangle',
+    name: '矩形街区',
+    summary: '4 nodes / 4 edges / 1 face',
+    nodes: [
+      { id: 'n0', x: 0, y: 0 },
+      { id: 'n1', x: 100, y: 0 },
+      { id: 'n2', x: 100, y: 100 },
+      { id: 'n3', x: 0, y: 100 },
+    ],
+    edges: [
+      { id: 'e0', start: 'n0', end: 'n1' },
+      { id: 'e1', start: 'n1', end: 'n2' },
+      { id: 'e2', start: 'n2', end: 'n3' },
+      { id: 'e3', start: 'n3', end: 'n0' },
+    ],
+    stats: ['Validate Draft: 通过', '闭合道路推断 1 个城市块', 'Preview 不修改 ICity Base'],
+  },
+  {
+    id: 'cross',
+    name: '十字路口',
+    summary: '5 nodes / 4 edges / 0 face',
+    nodes: [
+      { id: 'n0', x: 50, y: 0 },
+      { id: 'n1', x: 50, y: 100 },
+      { id: 'n2', x: 0, y: 50 },
+      { id: 'n3', x: 100, y: 50 },
+      { id: 'n4', x: 50, y: 50 },
+    ],
+    edges: [
+      { id: 'e0', start: 'n0', end: 'n4' },
+      { id: 'e1', start: 'n4', end: 'n1' },
+      { id: 'e2', start: 'n2', end: 'n4' },
+      { id: 'e3', start: 'n4', end: 'n3' },
+    ],
+    stats: ['交叉道路拆分为共享节点', '重复边与过短边会被清理', '适合演示 Normalize Draft'],
+  },
+  {
+    id: 'grid',
+    name: '田字路网',
+    summary: '9 nodes / 12 edges / 4+ faces',
+    nodes: [
+      { id: 'n0', x: 0, y: 0 },
+      { id: 'n1', x: 50, y: 0 },
+      { id: 'n2', x: 100, y: 0 },
+      { id: 'n3', x: 0, y: 50 },
+      { id: 'n4', x: 50, y: 50 },
+      { id: 'n5', x: 100, y: 50 },
+      { id: 'n6', x: 0, y: 100 },
+      { id: 'n7', x: 50, y: 100 },
+      { id: 'n8', x: 100, y: 100 },
+    ],
+    edges: [
+      { id: 'e0', start: 'n0', end: 'n1' },
+      { id: 'e1', start: 'n1', end: 'n2' },
+      { id: 'e2', start: 'n3', end: 'n4' },
+      { id: 'e3', start: 'n4', end: 'n5' },
+      { id: 'e4', start: 'n6', end: 'n7' },
+      { id: 'e5', start: 'n7', end: 'n8' },
+      { id: 'e6', start: 'n0', end: 'n3' },
+      { id: 'e7', start: 'n3', end: 'n6' },
+      { id: 'e8', start: 'n1', end: 'n4' },
+      { id: 'e9', start: 'n4', end: 'n7' },
+      { id: 'e10', start: 'n2', end: 'n5' },
+      { id: 'e11', start: 'n5', end: 'n8' },
+    ],
+    stats: ['黑白草图可识别为点线 Draft', 'Apply 后替换真实 ICity Base', '闭合道路生成 Procedural 城市块'],
+  },
+]
+
 const permissionRules: { key: PermissionKey; title: string; description: string }[] = [
   {
     key: 'viewTemplates',
@@ -319,6 +415,48 @@ function normalizeIdentifier(value: string) {
   return value.trim().toLowerCase()
 }
 
+function rememberStorageKey(method: LoginMethod) {
+  return method === 'email' ? rememberedEmailLoginKey : rememberedUsernameLoginKey
+}
+
+function emptyRememberedLogin(): RememberedLogin {
+  return {
+    rememberIdentifier: false,
+    identifier: '',
+    rememberPassword: false,
+    password: '',
+  }
+}
+
+function readRememberedLogin(method: LoginMethod): RememberedLogin {
+  try {
+    const rawRemembered = localStorage.getItem(rememberStorageKey(method))
+    if (!rawRemembered) return emptyRememberedLogin()
+    const parsedRemembered = JSON.parse(rawRemembered) as Partial<RememberedLogin>
+    const rememberIdentifier = parsedRemembered.rememberIdentifier === true
+    const rememberPassword = parsedRemembered.rememberPassword === true
+
+    return {
+      rememberIdentifier,
+      identifier: rememberIdentifier && typeof parsedRemembered.identifier === 'string' ? parsedRemembered.identifier : '',
+      rememberPassword,
+      password: rememberPassword && typeof parsedRemembered.password === 'string' ? parsedRemembered.password : '',
+    }
+  } catch {
+    return emptyRememberedLogin()
+  }
+}
+
+function writeRememberedLogin(method: LoginMethod, remembered: RememberedLogin) {
+  localStorage.setItem(rememberStorageKey(method), JSON.stringify(remembered))
+  localStorage.setItem(rememberedLoginMethodKey, method)
+}
+
+function readRememberedLoginMethod(): LoginMethod {
+  const storedMethod = localStorage.getItem(rememberedLoginMethodKey)
+  return storedMethod === 'username' ? 'username' : 'email'
+}
+
 function readUsers(): LocalUser[] {
   try {
     const rawUsers = localStorage.getItem(usersKey)
@@ -334,7 +472,6 @@ function writeUsers(users: LocalUser[]) {
   localStorage.setItem(usersKey, JSON.stringify(users))
 }
 
-<<<<<<< HEAD
 function readPluginReviews(): PluginReviewItem[] {
   try {
     const rawReviews = localStorage.getItem(pluginReviewsKey)
@@ -415,13 +552,10 @@ function clearStoredSession() {
   sessionStorage.removeItem(pageHistoryKey)
 }
 
-=======
->>>>>>> origin/qjw
 function readCurrentUser() {
   try {
     const rawUser = localStorage.getItem(currentUserKey)
     if (!rawUser) return null
-<<<<<<< HEAD
     const expiresAt = readSessionExpiry()
     if (expiresAt && expiresAt <= Date.now()) {
       clearStoredSession()
@@ -430,8 +564,6 @@ function readCurrentUser() {
     if (!expiresAt) {
       localStorage.setItem(sessionExpiresAtKey, String(createSessionExpiry()))
     }
-=======
->>>>>>> origin/qjw
     const parsedUser = JSON.parse(rawUser) as LocalUser
     return roles.some((item) => item.id === parsedUser.role) ? parsedUser : null
   } catch {
@@ -462,7 +594,6 @@ function canManagePermissions(role: RoleId) {
   return rolePermissions[role].managePermissions
 }
 
-<<<<<<< HEAD
 function canRecordAcceptance(role: RoleId) {
   return rolePermissions[role].recordAcceptance
 }
@@ -508,8 +639,6 @@ function adminLogActionLabel(action: AdminLogAction) {
   return '插件驳回'
 }
 
-=======
->>>>>>> origin/qjw
 function App() {
   const [currentUser, setCurrentUser] = useState<LocalUser | null>(() => readCurrentUser())
   const [role, setRole] = useState<RoleId>(() => {
@@ -520,18 +649,14 @@ function App() {
   const [selectedTemplateId, setSelectedTemplateId] = useState(() => {
     return localStorage.getItem(selectedTemplateKey) ?? '0'
   })
-<<<<<<< HEAD
   const [pluginReviews, setPluginReviews] = useState<PluginReviewItem[]>(() => readPluginReviews())
   const [adminLogs, setAdminLogs] = useState<AdminOperationLog[]>(() => readAdminLogs())
-=======
->>>>>>> origin/qjw
   const activeRole = currentUser?.role ?? role
 
   useEffect(() => {
     localStorage.setItem(roleKey, role)
   }, [role])
 
-<<<<<<< HEAD
   useEffect(() => {
     if (!currentUser) return
 
@@ -547,8 +672,6 @@ function App() {
     return () => window.clearTimeout(timer)
   }, [currentUser])
 
-=======
->>>>>>> origin/qjw
   function selectTemplate(id: string) {
     if (!canApplyTemplate(activeRole)) return
     localStorage.setItem(selectedTemplateKey, id)
@@ -557,16 +680,12 @@ function App() {
 
   function signIn(user: LocalUser) {
     localStorage.setItem(currentUserKey, JSON.stringify(user))
-<<<<<<< HEAD
     localStorage.setItem(sessionExpiresAtKey, String(createSessionExpiry()))
-=======
->>>>>>> origin/qjw
     setCurrentUser(user)
     setRole(user.role)
   }
 
   function signOut() {
-<<<<<<< HEAD
     clearStoredSession()
     setCurrentUser(null)
   }
@@ -595,13 +714,6 @@ function App() {
     })
   }
 
-=======
-    localStorage.removeItem(currentUserKey)
-    sessionStorage.removeItem(pageHistoryKey)
-    setCurrentUser(null)
-  }
-
->>>>>>> origin/qjw
   return (
     <Routes>
       <Route path="/" element={<Navigate to={currentUser ? '/dashboard' : '/login'} replace />} />
@@ -666,6 +778,26 @@ function App() {
         }
       />
       <Route
+        path="/nl-editor"
+        element={
+          currentUser ? (
+            <NaturalLanguageDemoPage role={activeRole} selectedTemplateId={selectedTemplateId} onLogout={signOut} />
+          ) : (
+            <Navigate to="/login" replace />
+          )
+        }
+      />
+      <Route
+        path="/layout-control"
+        element={
+          currentUser ? (
+            <LayoutControlDemoPage role={activeRole} selectedTemplateId={selectedTemplateId} onLogout={signOut} />
+          ) : (
+            <Navigate to="/login" replace />
+          )
+        }
+      />
+      <Route
         path="/plugin-entry"
         element={
           currentUser && canEnterBlender(activeRole) ? (
@@ -681,7 +813,6 @@ function App() {
         path="/admin"
         element={
           currentUser && canManagePermissions(activeRole) ? (
-<<<<<<< HEAD
             <AdminManagementPage
               adminLogs={adminLogs}
               currentUserId={currentUser.id}
@@ -728,9 +859,6 @@ function App() {
               onLogout={signOut}
               onUpdatePluginReview={updatePluginReview}
             />
-=======
-            <AdminManagementPage role={activeRole} selectedTemplateId={selectedTemplateId} onLogout={signOut} />
->>>>>>> origin/qjw
           ) : currentUser ? (
             <AccessDeniedPage role={activeRole} selectedTemplateId={selectedTemplateId} onLogout={signOut} />
           ) : (
@@ -761,16 +889,11 @@ function Shell({
   const [sidebarCollapsed, setSidebarCollapsed] = useState(() => {
     return localStorage.getItem(sidebarCollapsedKey) === 'true'
   })
-<<<<<<< HEAD
-=======
-  const [pageHistory, setPageHistory] = useState(() => readPageHistory())
->>>>>>> origin/qjw
 
   useEffect(() => {
     localStorage.setItem(sidebarCollapsedKey, String(sidebarCollapsed))
   }, [sidebarCollapsed])
 
-<<<<<<< HEAD
   const pageHistory = useMemo(() => {
     const currentHistory = readPageHistory()
     if (!isTrackedPage(location.pathname)) return currentHistory
@@ -784,25 +907,6 @@ function Shell({
     const nextHistory = { entries, index: entries.length - 1 }
     writePageHistory(nextHistory)
     return nextHistory
-=======
-  useEffect(() => {
-    if (!isTrackedPage(location.pathname)) return
-
-    setPageHistory((currentHistory) => {
-      if (currentHistory.entries[currentHistory.index] === location.pathname) {
-        return currentHistory
-      }
-
-      const activeEntries =
-        currentHistory.index >= 0
-          ? currentHistory.entries.slice(0, currentHistory.index + 1)
-          : []
-      const entries = [...activeEntries, location.pathname].slice(-24)
-      const nextHistory = { entries, index: entries.length - 1 }
-      writePageHistory(nextHistory)
-      return nextHistory
-    })
->>>>>>> origin/qjw
   }, [location.pathname])
 
   function handleLogout() {
@@ -819,10 +923,6 @@ function Shell({
 
     const nextHistory = { entries: currentHistory.entries, index: nextIndex }
     writePageHistory(nextHistory)
-<<<<<<< HEAD
-=======
-    setPageHistory(nextHistory)
->>>>>>> origin/qjw
     navigate(target)
   }
 
@@ -865,6 +965,14 @@ function Shell({
             <Store size={18} />
             <span className="nav-label">模板商城</span>
           </Link>
+          <Link to="/nl-editor" title="自然语言编辑">
+            <Send size={18} />
+            <span className="nav-label">自然语言编辑</span>
+          </Link>
+          <Link to="/layout-control" title="布局控制">
+            <ClipboardList size={18} />
+            <span className="nav-label">布局控制</span>
+          </Link>
           {currentRole.id === 'modeler' ? (
             <Link to="/plugin-entry" title="Blender 入口">
               <PlugZap size={18} />
@@ -877,7 +985,6 @@ function Shell({
             </span>
           )}
           {canManagePermissions(currentRole.id) && (
-<<<<<<< HEAD
             <>
               <Link to="/admin" title="权限管理">
                 <ShieldCheck size={18} />
@@ -893,11 +1000,6 @@ function Shell({
             <Link to="/analyst" title="验收中心">
               <ClipboardCheck size={18} />
               <span className="nav-label">验收中心</span>
-=======
-            <Link to="/admin" title="权限管理">
-              <ShieldCheck size={18} />
-              <span className="nav-label">权限管理</span>
->>>>>>> origin/qjw
             </Link>
           )}
         </nav>
@@ -963,11 +1065,7 @@ function AuthVisual() {
       </div>
       <div className="login-copy">
         <h1>智能城市生成系统</h1>
-<<<<<<< HEAD
         <p>管理城市模板、角色权限和 Blender 插件入口的原型系统。</p>
-=======
-        <p>管理城市模板、角色权限和 Blender 插件入口的课程原型系统。</p>
->>>>>>> origin/qjw
       </div>
     </section>
   )
@@ -983,14 +1081,22 @@ function LoginPage({
   onLogin: (user: LocalUser) => void
 }) {
   const navigate = useNavigate()
-  const [method, setMethod] = useState<LoginMethod>('email')
-  const [identifier, setIdentifier] = useState('')
-  const [password, setPassword] = useState('')
+  const initialMethod = useMemo(() => readRememberedLoginMethod(), [])
+  const initialRemembered = useMemo(() => readRememberedLogin(initialMethod), [initialMethod])
+  const [method, setMethod] = useState<LoginMethod>(initialMethod)
+  const [identifier, setIdentifier] = useState(initialRemembered.identifier)
+  const [password, setPassword] = useState(initialRemembered.password)
+  const [rememberIdentifier, setRememberIdentifier] = useState(initialRemembered.rememberIdentifier)
+  const [rememberPassword, setRememberPassword] = useState(initialRemembered.rememberPassword)
   const [error, setError] = useState('')
 
   function changeMethod(nextMethod: LoginMethod) {
+    const remembered = readRememberedLogin(nextMethod)
     setMethod(nextMethod)
-    setIdentifier('')
+    setIdentifier(remembered.identifier)
+    setPassword(remembered.password)
+    setRememberIdentifier(remembered.rememberIdentifier)
+    setRememberPassword(remembered.rememberPassword)
     setError('')
   }
 
@@ -1011,6 +1117,12 @@ function LoginPage({
       return
     }
 
+    writeRememberedLogin(method, {
+      rememberIdentifier,
+      identifier: rememberIdentifier ? identifier : '',
+      rememberPassword,
+      password: rememberPassword ? password : '',
+    })
     onLogin(matchedUser)
     navigate('/dashboard')
   }
@@ -1065,6 +1177,25 @@ function LoginPage({
               value={password}
             />
           </label>
+
+          <div className="remember-options" aria-label="登录记忆选项">
+            <label className="checkbox-field">
+              <input
+                checked={rememberIdentifier}
+                onChange={(event) => setRememberIdentifier(event.target.checked)}
+                type="checkbox"
+              />
+              <span>{method === 'email' ? '记住邮箱' : '记住用户名'}</span>
+            </label>
+            <label className="checkbox-field">
+              <input
+                checked={rememberPassword}
+                onChange={(event) => setRememberPassword(event.target.checked)}
+                type="checkbox"
+              />
+              <span>记住密码</span>
+            </label>
+          </div>
 
           {error && (
             <p className="form-error" role="alert">
@@ -1148,11 +1279,7 @@ function RegisterPage({
 
     const users = readUsers()
     const sameRoleUsers = users.filter((user) => user.role === role)
-<<<<<<< HEAD
     const usernameTaken = users.some(
-=======
-    const usernameTaken = sameRoleUsers.some(
->>>>>>> origin/qjw
       (user) => normalizeIdentifier(user.username) === normalizeIdentifier(trimmedUsername),
     )
     const emailTaken = sameRoleUsers.some(
@@ -1160,19 +1287,11 @@ function RegisterPage({
     )
 
     if (usernameTaken) {
-<<<<<<< HEAD
       nextErrors.username = '账号名已经被注册，请更换；用户名在所有角色中都必须唯一'
     }
 
     if (emailTaken) {
       nextErrors.email = `该邮箱已经注册过${roleName(role)}，同一邮箱每个角色只能注册一次`
-=======
-      nextErrors.username = '该角色下账号名已经注册，请更换'
-    }
-
-    if (emailTaken) {
-      nextErrors.email = '该角色下邮箱已经注册，请更换'
->>>>>>> origin/qjw
     }
 
     if (Object.keys(nextErrors).length) {
@@ -1283,11 +1402,7 @@ function RegisterPage({
   )
 }
 
-<<<<<<< HEAD
 function getDashboardView(role: RoleId) {
-=======
-function getDashboardView(role: RoleId, templateId: string) {
->>>>>>> origin/qjw
   if (role === 'admin') {
     return {
       eyebrow: '管理员工作台',
@@ -1302,7 +1417,7 @@ function getDashboardView(role: RoleId, templateId: string) {
           icon: <ShieldCheck size={19} />,
           label: '权限管理',
           title: '用户权限总览',
-          text: '查看不同角色可用模块，辅助说明管理员对系统权限的管理能力。',
+          text: '查看不同角色可用模块，查看各角色可访问的页面和操作范围。',
         },
         {
           icon: <PlugZap size={19} />,
@@ -1324,14 +1439,9 @@ function getDashboardView(role: RoleId, templateId: string) {
     return {
       eyebrow: '分析师工作台',
       title: '验收模板能力与插件演示链路',
-      description: '分析师视图强调需求核对、验收评审和指标记录，用于支撑课程文档与演示说明。',
-<<<<<<< HEAD
+      description: '分析师视图强调需求核对、验收评审和指标记录，用于沉淀模板评审、需求核对和验收记录。',
       actionText: '进入验收中心',
       actionLink: '/analyst',
-=======
-      actionText: '查看模板指标',
-      actionLink: `/templates/${templateId}`,
->>>>>>> origin/qjw
       workflowTitle: '验收与评审流程',
       steps: ['查看场景需求', '核对模板参数', '评审插件链路', '记录验收结论'],
       tasks: [
@@ -1339,7 +1449,7 @@ function getDashboardView(role: RoleId, templateId: string) {
           icon: <BarChart3 size={19} />,
           label: '行业需求',
           title: '模板适配分析',
-          text: '对比不同城市模板的适用场景，判断是否覆盖课程实验中的用户需求。',
+          text: '对比不同城市模板的适用场景，判断是否覆盖当前智慧城市场景需求。',
         },
         {
           icon: <BadgeCheck size={19} />,
@@ -1398,11 +1508,7 @@ function DashboardPage({
   onLogout: () => void
 }) {
   const currentTemplate = getTemplate(selectedTemplateId)
-<<<<<<< HEAD
   const dashboardView = getDashboardView(role)
-=======
-  const dashboardView = getDashboardView(role, currentTemplate.id)
->>>>>>> origin/qjw
 
   return (
     <Shell role={role} selectedTemplateId={selectedTemplateId} onLogout={onLogout}>
@@ -1483,11 +1589,23 @@ function DashboardPage({
           link={`/templates/${currentTemplate.id}`}
         />
         <FeatureCard
+          icon={<Send size={20} />}
+          title="自然语言编辑"
+          text="用中文描述想要的街区效果，查看系统整理出的场景参数。"
+          link="/nl-editor"
+        />
+        <FeatureCard
+          icon={<ClipboardList size={20} />}
+          title="布局控制"
+          text="编辑点线道路，查看 JSON 草稿，并从黑白草图生成路网。"
+          link="/layout-control"
+        />
+        <FeatureCard
           icon={<MonitorPlay size={20} />}
-          title="Demo 展示"
+          title="Blender 入口"
           text={
             canEnterBlender(role)
-              ? '用于录制原型系统演示视频，并支撑文档中的 UI 设计章节。'
+              ? '打开当前模板的插件参数面板，继续完成场景生成。'
               : '该入口仅建模师可直接进入，其他角色可在各自面板中查看审核或验收信息。'
           }
           link="/plugin-entry"
@@ -1649,6 +1767,248 @@ function TemplateDetailPage({
   )
 }
 
+function NaturalLanguageDemoPage({
+  role,
+  selectedTemplateId,
+  onLogout,
+}: {
+  role: RoleId
+  selectedTemplateId: string
+  onLogout: () => void
+}) {
+  const [activeDemoId, setActiveDemoId] = useState(naturalLanguageDemos[0].id)
+  const activeDemo = naturalLanguageDemos.find((demo) => demo.id === activeDemoId) ?? naturalLanguageDemos[0]
+
+  return (
+    <Shell role={role} selectedTemplateId={selectedTemplateId} onLogout={onLogout}>
+      <section className="page-heading">
+        <div>
+          <span className="eyebrow">自然语言交互</span>
+          <h1>中文指令映射到 iCity 场景编辑</h1>
+          <p>输入中文指令后，系统会整理出场景参数，并列出将执行的插件操作。</p>
+        </div>
+        <Link className="secondary-action" to="/plugin-entry">
+          查看插件入口
+          <ExternalLink size={17} />
+        </Link>
+      </section>
+
+      <section className="nl-demo-layout">
+        <div className="workspace-panel nl-command-panel">
+          <div className="panel-head">
+            <span className="eyebrow">输入示例</span>
+            <h2>自然语言指令</h2>
+          </div>
+          <div className="nl-input-preview">
+            <span>{activeDemo.command}</span>
+            <Send size={19} />
+          </div>
+          <div className="demo-choice-list">
+            {naturalLanguageDemos.map((demo) => (
+              <button
+                className={activeDemo.id === demo.id ? 'active' : ''}
+                key={demo.id}
+                onClick={() => setActiveDemoId(demo.id)}
+                type="button"
+              >
+                {demo.command}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        <div className="workspace-panel nl-result-panel">
+          <div className="panel-head">
+            <span className="eyebrow">解析结果</span>
+            <h2>{activeDemo.engine}</h2>
+          </div>
+          <div className="code-block result-code">
+            <span>{'{'}</span>
+            {activeDemo.result.map(([key, value]) => (
+              <span key={key}>  "{key}": "{value}",</span>
+            ))}
+            <span>  "operator": "icity.apply_nl_command"</span>
+            <span>{'}'}</span>
+          </div>
+          <div className="compact-params">
+            {activeDemo.effects.map((effect) => (
+              <span key={effect}>{effect}</span>
+            ))}
+          </div>
+        </div>
+      </section>
+
+      <section className="capability-grid">
+        <div className="workspace-panel">
+          <div className="panel-head">
+            <span className="eyebrow">控制维度</span>
+            <h2>资产、交通、人群、生态统一表达</h2>
+          </div>
+          <div className="capability-list">
+            {['树木/座椅/路面材质', '车流 none-low-medium-high-max', '人群 none-low-medium-high-max', '湖光山色 / 群山 / 河谷 / 清空生态'].map((item) => (
+              <span key={item}>
+                <BadgeCheck size={17} />
+                {item}
+              </span>
+            ))}
+          </div>
+        </div>
+
+        <div className="workspace-panel">
+          <div className="panel-head">
+            <span className="eyebrow">后端调用</span>
+            <h2>即将执行的插件操作</h2>
+          </div>
+          <div className="operator-list">
+            {activeDemo.operators.map((operator) => (
+              <code key={operator}>{operator}</code>
+            ))}
+          </div>
+        </div>
+      </section>
+    </Shell>
+  )
+}
+
+function LayoutControlDemoPage({
+  role,
+  selectedTemplateId,
+  onLogout,
+}: {
+  role: RoleId
+  selectedTemplateId: string
+  onLogout: () => void
+}) {
+  const [activeSampleId, setActiveSampleId] = useState(layoutSamples[0].id)
+  const activeSample = layoutSamples.find((sample) => sample.id === activeSampleId) ?? layoutSamples[0]
+  const graphJson = JSON.stringify(
+    {
+      version: 1,
+      nodes: activeSample.nodes.map((node) => ({ ...node, z: 0 })),
+      edges: activeSample.edges.map((edge) => ({ ...edge, enabled_as_road: true })),
+      faces: [],
+    },
+    null,
+    2,
+  )
+
+  return (
+    <Shell role={role} selectedTemplateId={selectedTemplateId} onLogout={onLogout}>
+      <section className="page-heading">
+        <div>
+          <span className="eyebrow">道路布局控制</span>
+          <h1>点线 Draft、JSON 输入与草图识别展示</h1>
+          <p>选择路网草稿，查看点线结构、JSON 数据和草图识别后的可编辑道路。</p>
+        </div>
+        <Link className="secondary-action" to="/templates">
+          返回模板商城
+          <ChevronLeft size={17} />
+        </Link>
+      </section>
+
+      <section className="layout-demo-layout">
+        <div className="workspace-panel layout-map-panel">
+          <div className="panel-head">
+            <span className="eyebrow">Draft Preview</span>
+            <h2>{activeSample.name}</h2>
+          </div>
+          <div className="layout-map">
+            {activeSample.edges.map((edge) => {
+              const start = activeSample.nodes.find((node) => node.id === edge.start)
+              const end = activeSample.nodes.find((node) => node.id === edge.end)
+              if (!start || !end) return null
+              return (
+                <span
+                  className="layout-edge"
+                  key={edge.id}
+                  style={{
+                    left: `${Math.min(start.x, end.x)}%`,
+                    top: `${Math.min(start.y, end.y)}%`,
+                    width: start.x === end.x ? 4 : `${Math.abs(end.x - start.x)}%`,
+                    height: start.y === end.y ? 4 : `${Math.abs(end.y - start.y)}%`,
+                  }}
+                />
+              )
+            })}
+            {activeSample.nodes.map((node) => (
+              <span
+                className="layout-node"
+                key={node.id}
+                style={{ left: `${node.x}%`, top: `${node.y}%` }}
+                title={node.id}
+              >
+                {node.id.replace('n', '')}
+              </span>
+            ))}
+          </div>
+          <div className="layout-sample-switch">
+            {layoutSamples.map((sample) => (
+              <button
+                className={sample.id === activeSample.id ? 'active' : ''}
+                key={sample.id}
+                onClick={() => setActiveSampleId(sample.id)}
+                type="button"
+              >
+                {sample.name}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        <div className="workspace-panel layout-json-panel">
+          <div className="panel-head">
+            <span className="eyebrow">LayoutGraph JSON</span>
+            <h2>{activeSample.summary}</h2>
+          </div>
+          <pre className="json-preview">{graphJson}</pre>
+        </div>
+      </section>
+
+      <section className="capability-grid">
+        <div className="workspace-panel">
+          <div className="panel-head">
+            <span className="eyebrow">操作链路</span>
+            <h2>从草稿到真实 ICity Base</h2>
+          </div>
+          <div className="flow-line compact-flow">
+            {['Inspect', 'Validate', 'Normalize', 'Preview', 'Apply'].map((step, index) => (
+              <div className="flow-step" key={step}>
+                <span>{index + 1}</span>
+                <strong>{step}</strong>
+              </div>
+            ))}
+          </div>
+          <div className="capability-list">
+            {activeSample.stats.map((stat) => (
+              <span key={stat}>
+                <BadgeCheck size={17} />
+                {stat}
+              </span>
+            ))}
+          </div>
+        </div>
+
+        <div className="workspace-panel sketch-panel">
+          <div className="panel-head">
+            <span className="eyebrow">草图识别</span>
+            <h2>白底黑线图转可编辑道路</h2>
+          </div>
+          <div className="sketch-preview">
+            <span className="sketch-line horizontal"></span>
+            <span className="sketch-line vertical"></span>
+            <span className="sketch-caption">PNG / JPG 草图</span>
+          </div>
+          <div className="operator-list">
+            {['OpenCV 阈值提取', '骨架化中心线', '端点吸附', '转为 LayoutGraph'].map((item) => (
+              <code key={item}>{item}</code>
+            ))}
+          </div>
+        </div>
+      </section>
+    </Shell>
+  )
+}
+
 function PluginEntryPage({
   role,
   selectedTemplateId,
@@ -1667,7 +2027,7 @@ function PluginEntryPage({
         <div>
           <span className="eyebrow">插件系统入口</span>
           <h1>模拟跳转至 ICity Blender 插件</h1>
-          <p>助教要求原型系统只需模拟进入 Blender。这里保留模板 ID 和参数，方便演示衔接。</p>
+          <p>当前模板参数已准备好，可带入 iCity Blender 插件继续生成场景。</p>
         </div>
       </section>
 
@@ -1699,8 +2059,8 @@ function PluginEntryPage({
         </div>
 
         <div className="plugin-notes">
-          <span className="eyebrow">交付说明</span>
-          <h2>前端只负责模拟入口，插件负责真实应用模板</h2>
+          <span className="eyebrow">插件配置</span>
+          <h2>模板参数将作为插件生成配置使用</h2>
           <ul>
             <li>
               <BadgeCheck size={18} />
@@ -1712,7 +2072,7 @@ function PluginEntryPage({
             </li>
             <li>
               <BadgeCheck size={18} />
-              录制 Demo 时可先展示本页，再切到 Blender 插件应用同一模板。
+              确认参数后，在 Blender 插件中应用同一模板。
             </li>
           </ul>
         </div>
@@ -1724,7 +2084,7 @@ function PluginEntryPage({
             <span className="modal-icon">
               <PlugZap size={24} />
             </span>
-            <h2>已模拟跳转至 Blender 插件系统</h2>
+            <h2>Blender 插件参数已准备好</h2>
             <p>请在插件中输入模板 ID：{template.id}，然后点击 Apply Template。</p>
             <button className="primary-action" type="button" onClick={() => setOpen(false)}>
               知道了
@@ -1805,7 +2165,6 @@ function AccessDeniedPage({
   )
 }
 
-<<<<<<< HEAD
 function AnalystAcceptancePage({
   pluginReviews,
   role,
@@ -1855,32 +2214,14 @@ function AnalystAcceptancePage({
     setMemoSaved(true)
     window.setTimeout(() => setMemoSaved(false), 1500)
   }
-=======
-function AdminManagementPage({
-  role,
-  selectedTemplateId,
-  onLogout,
-}: {
-  role: RoleId
-  selectedTemplateId: string
-  onLogout: () => void
-}) {
-  const users = readUsers()
->>>>>>> origin/qjw
 
   return (
     <Shell role={role} selectedTemplateId={selectedTemplateId} onLogout={onLogout}>
       <section className="page-heading">
         <div>
-<<<<<<< HEAD
           <span className="eyebrow">分析师专属</span>
           <h1>标准制定、插件验收与行业需求备忘录</h1>
           <p>分析师先基于行业需求制定验收标准，再对插件提交物进行评审；通过后进入管理员上架审核队列。</p>
-=======
-          <span className="eyebrow">管理员专属</span>
-          <h1>用户权限管理与系统审核</h1>
-          <p>这里用本地用户库模拟后台管理能力，展示用户列表、角色权限、插件审核状态和系统运行状态。</p>
->>>>>>> origin/qjw
         </div>
         <Link className="secondary-action" to="/dashboard">
           返回工作台
@@ -1888,7 +2229,6 @@ function AdminManagementPage({
         </Link>
       </section>
 
-<<<<<<< HEAD
       <section className="analyst-layout">
         <div className="workspace-panel analyst-panel standards-panel">
           <div className="panel-head">
@@ -2234,23 +2574,10 @@ function AdminManagementPage({
             {users.length ? (
               users.map((user) => (
                 <div className="admin-user-row" key={user.id}>
-=======
-      <section className="admin-layout" id="admin-permissions">
-        <div className="workspace-panel admin-panel admin-users-panel">
-          <div className="panel-head">
-            <span className="eyebrow">用户列表</span>
-            <h2>本地注册用户</h2>
-          </div>
-          <ul className="admin-user-list">
-            {users.length ? (
-              users.map((user) => (
-                <li key={user.id}>
->>>>>>> origin/qjw
                   <div>
                     <strong>{user.username}</strong>
                     <span>{user.email}</span>
                   </div>
-<<<<<<< HEAD
                   <label className="role-select-wrap">
                     <span>角色</span>
                     <select
@@ -2283,15 +2610,6 @@ function AdminManagementPage({
               <div className="empty-row">暂无注册用户</div>
             )}
           </div>
-=======
-                  <em>{roleLabel(user.role).replace('视图', '')}</em>
-                </li>
-              ))
-            ) : (
-              <li className="empty-row">暂无注册用户</li>
-            )}
-          </ul>
->>>>>>> origin/qjw
         </div>
 
         <div className="workspace-panel admin-panel">
@@ -2304,37 +2622,8 @@ function AdminManagementPage({
 
         <div className="workspace-panel admin-panel">
           <div className="panel-head">
-<<<<<<< HEAD
             <span className="eyebrow">系统状态</span>
             <h2>后台运行概览</h2>
-=======
-            <span className="eyebrow">插件审核状态</span>
-            <h2>Blender 入口审核</h2>
-          </div>
-          <ul className="admin-status-list">
-            <li>
-              <BadgeCheck size={18} />
-              <span>入口路由</span>
-              <strong>仅建模师可访问</strong>
-            </li>
-            <li>
-              <BadgeCheck size={18} />
-              <span>模板参数</span>
-              <strong>字段已映射</strong>
-            </li>
-            <li>
-              <BadgeCheck size={18} />
-              <span>演示弹窗</span>
-              <strong>可模拟跳转</strong>
-            </li>
-          </ul>
-        </div>
-
-        <div className="workspace-panel admin-panel">
-          <div className="panel-head">
-            <span className="eyebrow">系统状态</span>
-            <h2>原型运行概览</h2>
->>>>>>> origin/qjw
           </div>
           <div className="system-metric-grid">
             <span>
@@ -2346,7 +2635,6 @@ function AdminManagementPage({
               系统角色
             </span>
             <span>
-<<<<<<< HEAD
               <strong>ON</strong>
               用户名全局唯一
             </span>
@@ -2364,23 +2652,11 @@ function AdminManagementPage({
           </div>
           <AdminOperationLogPanel logs={adminLogs} />
         </div>
-=======
-              <strong>2</strong>
-              受限页面
-            </span>
-            <span>
-              <strong>ON</strong>
-              权限守卫
-            </span>
-          </div>
-        </div>
->>>>>>> origin/qjw
       </section>
     </Shell>
   )
 }
 
-<<<<<<< HEAD
 function AdminAuditPage({
   adminLogs,
   pluginReviews,
@@ -2671,8 +2947,6 @@ function PluginDetailDrawer({ item, onClose }: { item: PluginReviewItem; onClose
   )
 }
 
-=======
->>>>>>> origin/qjw
 function PermissionMatrix() {
   return (
     <div className="permission-matrix" aria-label="角色权限矩阵">

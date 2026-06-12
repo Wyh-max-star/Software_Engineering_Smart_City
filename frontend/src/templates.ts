@@ -65,7 +65,7 @@ export const templates: CityTemplate[] = [
       bench: bench0,
     },
     tags: ['绿化慢行', '稀疏车流', '湖光山色'],
-    fit: '清新生态绿城，课程演示默认整城模板。',
+    fit: '清新生态绿城，适合作为默认整城模板。',
   },
   {
     id: '1',

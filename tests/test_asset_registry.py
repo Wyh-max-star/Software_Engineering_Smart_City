@@ -122,8 +122,6 @@ class AssetRegistryTests(unittest.TestCase):
 
         self.assertEqual(issues, [])
 
-<<<<<<< HEAD
-=======
     def test_load_manifest_supports_collection_based_blend_asset(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -157,7 +155,6 @@ class AssetRegistryTests(unittest.TestCase):
 
         self.assertEqual(asset_registry.blend_asset_target(asset), ("collection", "1986 Chevrolet M1009"))
 
->>>>>>> origin/qjw
 
 if __name__ == "__main__":
     unittest.main()
