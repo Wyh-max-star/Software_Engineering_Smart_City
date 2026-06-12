@@ -1,0 +1,23 @@
+.idea/
+.vscode/
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+
+# Local archives and Blender backup files should not be committed.
+*.zip
+*.blend1
+
+# OS/editor noise.
+.DS_Store
+Thumbs.db
+
+# LLM 私密密钥，绝不提交。
+llm_key.txt
+iCity/smart_city/manifests/llm_key.txt
+
+# 前端构建产物与依赖（前端另有自带 .gitignore，这里再兜底一层）。
+frontend/node_modules/
+frontend/dist/
+frontend/*.log
