@@ -1,0 +1,964 @@
+{
+  "_README": "iCity 模板化核心数据文件。前端(模板商城)与 Blender 插件(应用模板)共用同一份。以下凡是 _ 开头的键都是【注释/文档】，程序会自动忽略，不影响 JSON.parse / json.load。",
+  "_warning_naming": "命名后缀不统一！树/椅/灯结尾是 _ICity_Default；隔离柱/设施结尾是 _Default_ICity；路面材质结尾是 _Default。抄名字时务必一字不差(含空格、大小写)。",
+  "version": "1.0",
+  "theme": "Default",
+  "_theme_note": "icity 目前只有 Default 一个主题(assets/Assets 下只有 Default 文件夹)，所以 sna_theme 固定 Default。",
+  "_fieldGuide": {
+    "_note": "==== 字段说明，看这里 ====",
+    "templates[].display": "前端展示给人看的整数。约定[整数=资产编号]，与 catalog 里的 id 一致。",
+    "templates[].plugin": "插件真正调用的【真实资产/材质名】，机器用的，必须和 icity 资产库完全一致。",
+    "templates[].plugin.tree": "对应 scene.sna_street_asset_type='Tree' + sna_street_asset_browser=该名字",
+    "templates[].plugin.bench": "对应 sna_street_asset_type='Bench' + sna_street_asset_browser=该名字",
+    "templates[].plugin.road_material": "对应 sna_road_materials_type_='Road' + sna_road_materials_browser=该名字",
+    "templates[].source": "builtin=icity原有 / extended=资产扩充同学新增 / todo=待确认",
+    "catalog": "全量可选资产清单(就是那张表)。造新模板时从这里挑 asset 名字填进 plugin。",
+    "catalog.items[].desc": "资产外观描述(看缩略图人工确认)，给LLM做[自然语言->资产]映射用"
+  },
+  "_applyMechanism": {
+    "_note": "==== 插件端如何应用一个模板，供写代码参考(已由 icity 源码证实，🟡画面效果待 Blender 验证) ====",
+    "street_asset_types": [
+      "Light",
+      "Bench",
+      "Tree",
+      "Services",
+      "Bollard",
+      "Traffic light",
+      "Cars",
+      "Sign",
+      "Texture",
+      "Imperfection"
+    ],
+    "road_material_types": [
+      "Road",
+      "Curb",
+      "Sidewalk"
+    ],
+    "steps_place_street_asset": [
+      "1) scene.sna_street_asset_type = 'Tree'  (或 'Bench'/'Light'...)",
+      "2) scene.sna_street_asset_browser = 'Tree1_Tree_ICity_Default'",
+      "3) 进入 ICity Base 对象的编辑模式并选中路网",
+      "4) bpy.ops.sna.road_apply_5c3ab()  -> 写入几何节点组 'Road 2' 输入"
+    ],
+    "steps_set_road_material": [
+      "1) scene.sna_road_materials_type_ = 'Road'  (或 'Curb'/'Sidewalk')",
+      "2) scene.sna_road_materials_browser = 'ICity_Road 4 clean_Default'",
+      "3) (编辑模式下) bpy.ops.sna.road_apply_5c3ab()  -> Texture 分支写 'Road 2' inputs[2]"
+    ],
+    "operators": {
+      "start": "sna.start_5209e  (初始化场景，加载 ICity start.blend)",
+      "city_apply": "sna.city_apply_dae66  (写建筑/景观到网格属性，需Edit模式)",
+      "road_apply": "sna.road_apply_5c3ab  (写道路材质/街道资产，需Edit模式)"
+    },
+    "geometry_node_inputs": {
+      "_note": "Road apply 把资产写进几何节点组 'Road 2' 的不同输入(已由源码确认)，写插件函数时按类型分支：",
+      "road_material_Texture": "nodes[road_materials_type].inputs[2] = bpy.data.materials[材质名]",
+      "Services": "nodes['Services'].inputs[5] = bpy.data.collections[资产名]",
+      "对象类_Tree_Bench_Light_Bollard等": "nodes[type].inputs[4] = bpy.data.objects[资产名]",
+      "可见性属性": "Light 类 attribute_set value_bool=False；其余对象类 value_bool=True"
+    },
+    "scene_objects": {
+      "_note": "Start 后场景里的关键对象/集合名(写函数时会用到)：",
+      "edit_target": "ICity Base  (要进编辑模式、选路网的就是它)",
+      "objects": [
+        "ICity Road",
+        "ICity Road Boundry",
+        "ICity Spces",
+        "ICity Procedural ground",
+        "ICity building procedural base",
+        "Procedural building_Default_ICity"
+      ],
+      "collections": [
+        "ICity Assets",
+        "ICity_Procedural",
+        "ICity_Landscape"
+      ],
+      "node_group": "Road 2",
+      "materials_object": "ICity_Materials"
+    }
+  },
+  "_previews": {
+    "_note": "每个资产都有同名缩略图 .png，前端可换成 iCity 真实缩略图(UI更有说服力，UI项2分)。基准目录 icity/assets/Assets/Default/。",
+    "rule": "多数情况 预览图 = <资产名>.png，位于该类别的源文件夹。",
+    "folders": {
+      "tree/bench/light/bollard/sign/road_material/curb/sidewalk": "Default/Road/",
+      "building_preset": "Default/Building presets/",
+      "landscape": "Default/Building landscape/",
+      "park": "Default/Park/"
+    },
+    "exceptions": {
+      "services": "预览名多插了 _Services，例：资产 Electric box1_Default_ICity -> 预览 Electric box1_Services_Default_ICity.png",
+      "skyscraper06_08": "预览文件名首字母小写：skyscraper06_..png / skyscraper08_..png",
+      "manhole": "未发现对应预览图",
+      "road_material": "Road 文件夹里同时有 带_Default 和 不带_Default 两种png，用带 _Default 的那张"
+    }
+  },
+  "_cityStructure": {
+    "_note": "城市结构相关枚举(来自源码)，做更复杂模板/建筑时参考：",
+    "city_space_type": [
+      "Procedural",
+      "Park",
+      "Presets",
+      "Custom"
+    ],
+    "building_preset_type_enum": [
+      "Skyscrapper",
+      "Court",
+      "Market",
+      "Fire station",
+      "Police station",
+      "Hospital"
+    ]
+  },
+  "_gaps": {
+    "_note": "已发现的缺口(可作为'新增资产'方向，正好满足作业'新增2D/3D资产'要求)：",
+    "cars": "街道资产类型有 'Cars'，但 Default 库里没有车辆资产(SCGS 里有 car.blend 可借) -> 交通模拟同学",
+    "building_types_without_asset": "建筑类型枚举有 Market/Fire station/Police station/Hospital，但实际只有 Court/museum/Skyscraper 预设，缺对应模型",
+    "themes": "只有 Default 一个主题，没有古典/现代等多风格"
+  },
+  "_extensionHooks": {
+    "_note": "可借 SCGS(=icity+扩展)里现成的代码扩充模板能力，按需对接相应同学：",
+    "weather_daynight": "SCGS/weather.py、copilot.py 有 雨/雪/白天/夜晚 函数 -> 自然语言编辑同学",
+    "traffic": "SCGS/change_traffic_road.py、assets/car.blend -> 交通模拟同学",
+    "layout": "SCGS/create_city_layout.py、set layout.py、main_path_building.py -> 布局控制同学"
+  },
+  "templates": [
+    {
+      "id": "0",
+      "name": "公园城市模板",
+      "_comment": "绿色阔叶行道树+干净路面，清新生态。演示默认模板(模板0)。",
+      "sceneType": "生态慢行街区",
+      "display": {
+        "tree_type": 1,
+        "road_texture": 5,
+        "bench_type": 1
+      },
+      "plugin": {
+        "tree": "Tree1_Tree_ICity_Default",
+        "road_material": "ICity_Road 4 clean_Default",
+        "bench": "Bench1_Bench_ICity_Default",
+        "light": "Light1_Light_ICity_Default",
+        "bollard": "Bollard3_Bollard_Default_ICity",
+        "curb": "ICity_Curb grey_Default",
+        "sidewalk": "ICity_Sidewalk 1_Default"
+      },
+      "preview_icity": {
+        "tree": "Default/Road/Tree1_Tree_ICity_Default.png",
+        "road_material": "Default/Road/ICity_Road 4 clean_Default.png",
+        "bench": "Default/Road/Bench1_Bench_ICity_Default.png"
+      },
+      "source": {
+        "tree": "builtin",
+        "road_material": "builtin",
+        "bench": "builtin"
+      },
+      "scene": {
+        "_comment": "整城: 混凝土人行道、花箱、稀疏车流、少量行人、旁边一片湖+山生态地块。",
+        "surface": {
+          "enable": true,
+          "surface_style": "CONCRETE_BOULEVARD",
+          "surface_target_mode": "ROAD_SYSTEM",
+          "surface_slot": "Sidewalk",
+          "enable_lane_markings": false
+        },
+        "streetlights": {
+          "enable": true,
+          "streetlight_count": 16
+        },
+        "roadside": {
+          "enable": true,
+          "roadside_asset_style": "PLANTER",
+          "roadside_asset_count": 18
+        },
+        "traffic": {
+          "enable": true,
+          "car_count": 4,
+          "taxi_count": 1,
+          "bus_count": 1
+        },
+        "pedestrian": {
+          "enable": true,
+          "walker_count": 12,
+          "idle_count": 8,
+          "walk_speed": 0.16
+        },
+        "ecology": {
+          "enable": true,
+          "ecology_plot_mode": "LAKE_RING",
+          "plot_shape": "ELLIPSE",
+          "plot_width": 110,
+          "plot_depth": 90,
+          "mountain_height": 24,
+          "lake_radius": 26,
+          "boat_count": 4,
+          "generate_river": false,
+          "seed": 21
+        }
+      }
+    },
+    {
+      "id": "1",
+      "name": "金秋商业街模板",
+      "_comment": "金黄行道树(Tree7)+做旧路面+现代黑金属椅，暖色繁华老街，与公园模板对比强烈。",
+      "sceneType": "暖色商业主街",
+      "display": {
+        "tree_type": 7,
+        "road_texture": 7,
+        "bench_type": 11
+      },
+      "plugin": {
+        "tree": "Tree7_Tree_ICity_Default",
+        "road_material": "ICity_Road 8 dirty_Default",
+        "bench": "Bench11_Bench_ICity_Default",
+        "light": "Light6_Light_ICity_Default",
+        "bollard": "Bollard4_Bollard_Default_ICity",
+        "curb": "ICity_Curb yellow black_Default",
+        "sidewalk": "ICity_Sidewalk 3_Default"
+      },
+      "preview_icity": {
+        "tree": "Default/Road/Tree7_Tree_ICity_Default.png",
+        "road_material": "Default/Road/ICity_Road 8 dirty_Default.png",
+        "bench": "Default/Road/Bench11_Bench_ICity_Default.png"
+      },
+      "source": {
+        "tree": "builtin",
+        "road_material": "builtin",
+        "bench": "builtin"
+      },
+      "scene": {
+        "_comment": "整城: 带车道线沥青主干道、公交站、密集车流(车+出租+公交)、汹涌人潮、无生态。",
+        "surface": {
+          "enable": true,
+          "surface_style": "ASPHALT_MARKED",
+          "surface_target_mode": "ROAD_SYSTEM",
+          "surface_slot": "Road",
+          "enable_lane_markings": true
+        },
+        "streetlights": {
+          "enable": true,
+          "streetlight_count": 28,
+          "streetlight_emission_strength": 9.0
+        },
+        "roadside": {
+          "enable": true,
+          "roadside_asset_style": "BUS_STOP",
+          "roadside_asset_count": 16,
+          "roadside_asset_offset": 5.0
+        },
+        "traffic": {
+          "enable": true,
+          "car_count": 26,
+          "taxi_count": 10,
+          "bus_count": 5,
+          "vehicle_scale": 0.8,
+          "bus_scale": 1.2
+        },
+        "pedestrian": {
+          "enable": true,
+          "walker_count": 48,
+          "idle_count": 22,
+          "walk_speed": 0.22,
+          "walk_speed_variation": 0.35
+        },
+        "ecology": {
+          "enable": false,
+          "ecology_plot_mode": "MOUNTAIN_ONLY"
+        }
+      }
+    },
+    {
+      "id": "2",
+      "name": "滨海社区模板",
+      "_comment": "棕榈行道树(Tree14)+干净路面，度假滨海风，与前两者一眼可分。",
+      "sceneType": "南国滨海社区",
+      "display": {
+        "tree_type": 14,
+        "road_texture": 1,
+        "bench_type": 3
+      },
+      "plugin": {
+        "tree": "Tree14_Tree_ICity_Default",
+        "road_material": "ICity_Road 1 clean_Default",
+        "bench": "Bench3_Bench_ICity_Default",
+        "light": "Light5_Light_ICity_Default",
+        "bollard": "Bollard9_Bollard_Default_ICity",
+        "curb": "ICity_Curb grey black_Default",
+        "sidewalk": "ICity_Sidewalk 4_Default"
+      },
+      "preview_icity": {
+        "tree": "Default/Road/Tree14_Tree_ICity_Default.png",
+        "road_material": "Default/Road/ICity_Road 1 clean_Default.png",
+        "bench": "Default/Road/Bench3_Bench_ICity_Default.png"
+      },
+      "source": {
+        "tree": "builtin",
+        "road_material": "builtin",
+        "bench": "builtin"
+      },
+      "scene": {
+        "_comment": "整城: 暖色木栈道、长椅、中等车流、中等人流、河谷(蜿蜒河+两岸山)生态。",
+        "surface": {
+          "enable": true,
+          "surface_style": "BOARDWALK_WARM",
+          "surface_target_mode": "ROAD_SYSTEM",
+          "surface_slot": "Sidewalk"
+        },
+        "streetlights": {
+          "enable": true,
+          "streetlight_count": 14
+        },
+        "roadside": {
+          "enable": true,
+          "roadside_asset_style": "BENCH",
+          "roadside_asset_count": 12,
+          "roadside_asset_scale": 1.1
+        },
+        "traffic": {
+          "enable": true,
+          "car_count": 8,
+          "taxi_count": 2,
+          "bus_count": 1
+        },
+        "pedestrian": {
+          "enable": true,
+          "walker_count": 20,
+          "idle_count": 10,
+          "walk_speed": 0.18
+        },
+        "ecology": {
+          "enable": true,
+          "ecology_plot_mode": "RIVER_VALLEY",
+          "plot_shape": "RECTANGLE",
+          "plot_width": 120,
+          "plot_depth": 90,
+          "mountain_height": 14,
+          "generate_river": true,
+          "river_source_width": 6,
+          "river_mouth_width": 16,
+          "river_depth": 3.5,
+          "river_meander": 0.4,
+          "river_bend_count": 4,
+          "seed": 33
+        }
+      }
+    }
+  ],
+  "catalog": {
+    "_note": "==== 全量可选资产清单(那张表) ==== 只收录【已在 Blender 确认可调】的资产类别。id=建议整数编号；asset=插件真实名(原样填入plugin)；source=builtin/extended。已排除: sign(调间距非样式)/services(捆绑无变体)/cars(无资产)/imperfection(散布非样式)。",
+    "tree": {
+      "_type": "街道资产, sna_street_asset_type='Tree'",
+      "_count": 14,
+      "items": [
+        {
+          "id": 1,
+          "asset": "Tree1_Tree_ICity_Default",
+          "source": "builtin",
+          "desc": "绿色阔叶乔木，树冠圆润饱满（通用行道树）"
+        },
+        {
+          "id": 2,
+          "asset": "Tree2_Tree_ICity_Default",
+          "source": "builtin",
+          "desc": "绿色阔叶乔木，高大饱满"
+        },
+        {
+          "id": 3,
+          "asset": "Tree3_Tree_ICity_Default",
+          "source": "builtin",
+          "desc": "绿色阔叶乔木，中等高度、略锥形"
+        },
+        {
+          "id": 4,
+          "asset": "Tree4_Tree_ICity_Default",
+          "source": "builtin",
+          "desc": "垂柳，枝条下垂(willow)"
+        },
+        {
+          "id": 5,
+          "asset": "Tree5_Tree_ICity_Default",
+          "source": "builtin",
+          "desc": "绿色阔叶乔木，细高"
+        },
+        {
+          "id": 6,
+          "asset": "Tree6_Tree_ICity_Default",
+          "source": "builtin",
+          "desc": "绿色阔叶乔木，高大"
+        },
+        {
+          "id": 7,
+          "asset": "Tree7_Tree_ICity_Default",
+          "source": "builtin",
+          "desc": "金黄色秋季树，叶色金黄(autumn/golden，最醒目)"
+        },
+        {
+          "id": 8,
+          "asset": "Tree8_Tree_ICity_Default",
+          "source": "builtin",
+          "desc": "深绿色浓密圆形树冠"
+        },
+        {
+          "id": 9,
+          "asset": "Tree9_Tree_ICity_Default",
+          "source": "builtin",
+          "desc": "绿色乔木，细高"
+        },
+        {
+          "id": 10,
+          "asset": "Tree10_Tree_ICity_Default",
+          "source": "builtin",
+          "desc": "绿色阔叶，叶片繁茂"
+        },
+        {
+          "id": 11,
+          "asset": "Tree11_Tree_ICity_Default",
+          "source": "builtin",
+          "desc": "稀疏白桦类，枝叶疏朗、色浅(birch)"
+        },
+        {
+          "id": 12,
+          "asset": "Tree12_Tree_ICity_Default",
+          "source": "builtin",
+          "desc": "绿色阔叶乔木，中等"
+        },
+        {
+          "id": 13,
+          "asset": "Tree13_Tree_ICity_Default",
+          "source": "builtin",
+          "desc": "椰子树，高细树干+羽状棕榈叶(coconut palm)"
+        },
+        {
+          "id": 14,
+          "asset": "Tree14_Tree_ICity_Default",
+          "source": "builtin",
+          "desc": "棕榈树，高干+扇形棕榈叶(palm)"
+        }
+      ]
+    },
+    "bench": {
+      "_type": "街道资产, sna_street_asset_type='Bench'",
+      "_count": 11,
+      "items": [
+        {
+          "id": 1,
+          "asset": "Bench1_Bench_ICity_Default",
+          "source": "builtin",
+          "desc": "浅棕木条座椅，带金属扶手(经典公园长椅)"
+        },
+        {
+          "id": 2,
+          "asset": "Bench2_Bench_ICity_Default",
+          "source": "builtin",
+          "desc": "浅棕木条长椅，简洁无扶手"
+        },
+        {
+          "id": 3,
+          "asset": "Bench3_Bench_ICity_Default",
+          "source": "builtin",
+          "desc": "深色木条长椅，竖向靠背板"
+        },
+        {
+          "id": 4,
+          "asset": "Bench4_Bench_ICity_Default",
+          "source": "builtin",
+          "desc": "深棕木条长椅，带木质扶手框"
+        },
+        {
+          "id": 5,
+          "asset": "Bench5_Bench_ICity_Default",
+          "source": "builtin",
+          "desc": "灰褐木条长椅，带扶手"
+        },
+        {
+          "id": 6,
+          "asset": "Bench6_Bench_ICity_Default",
+          "source": "builtin",
+          "desc": "灰色木条长椅，简洁"
+        },
+        {
+          "id": 7,
+          "asset": "Bench7_Bench_ICity_Default",
+          "source": "builtin",
+          "desc": "深色厚实木条长椅"
+        },
+        {
+          "id": 8,
+          "asset": "Bench8_Bench_ICity_Default",
+          "source": "builtin",
+          "desc": "窄板金属腿条凳，无靠背(细长)"
+        },
+        {
+          "id": 9,
+          "asset": "Bench9_Bench_ICity_Default",
+          "source": "builtin",
+          "desc": "浅木条长椅，带扶手"
+        },
+        {
+          "id": 10,
+          "asset": "Bench10_Bench_ICity_Default",
+          "source": "builtin",
+          "desc": "灰旧做旧木质长椅"
+        },
+        {
+          "id": 11,
+          "asset": "Bench11_Bench_ICity_Default",
+          "source": "builtin",
+          "desc": "黑色金属框现代长椅，通透简约(modern)"
+        }
+      ]
+    },
+    "light": {
+      "_type": "街道资产, sna_street_asset_type='Light'",
+      "_count": 6,
+      "items": [
+        {
+          "id": 1,
+          "asset": "Light1_Light_ICity_Default",
+          "source": "builtin",
+          "desc": "弯臂悬挂路灯，圆碗形灯头"
+        },
+        {
+          "id": 2,
+          "asset": "Light2_Light_ICity_Default",
+          "source": "builtin",
+          "desc": "弯臂路灯，扁平大灯头"
+        },
+        {
+          "id": 3,
+          "asset": "Light3_Light_ICity_Default",
+          "source": "builtin",
+          "desc": "弯臂路灯，圆灯头(似Light1)"
+        },
+        {
+          "id": 4,
+          "asset": "Light4_Light_ICity_Default",
+          "source": "builtin",
+          "desc": "弯臂路灯，水滴形灯罩"
+        },
+        {
+          "id": 5,
+          "asset": "Light5_Light_ICity_Default",
+          "source": "builtin",
+          "desc": "弯臂路灯，小型带散热片LED灯头(现代)"
+        },
+        {
+          "id": 6,
+          "asset": "Light6_Light_ICity_Default",
+          "source": "builtin",
+          "desc": "弯臂路灯，方形平板LED灯头(现代)"
+        }
+      ]
+    },
+    "bollard": {
+      "_type": "街道资产, sna_street_asset_type='Bollard'. 注意后缀是 _Default_ICity",
+      "_count": 7,
+      "items": [
+        {
+          "id": 1,
+          "asset": "Bollard1_Bollard_Default_ICity",
+          "source": "builtin",
+          "desc": "白色带反光环柔性警示柱(塑料)"
+        },
+        {
+          "id": 2,
+          "asset": "Bollard2_Bollard_Default_ICity",
+          "source": "builtin",
+          "desc": "酱红色铸铁圆头柱(古典装饰)"
+        },
+        {
+          "id": 3,
+          "asset": "Bollard3_Bollard_Default_ICity",
+          "source": "builtin",
+          "desc": "黑色铸铁圆头柱(古典装饰)"
+        },
+        {
+          "id": 4,
+          "asset": "Bollard4_Bollard_Default_ICity",
+          "source": "builtin",
+          "desc": "黑黄相间粗警示柱(安全)"
+        },
+        {
+          "id": 5,
+          "asset": "Bollard5_Bollard_Default_ICity",
+          "source": "builtin",
+          "desc": "灰底红环金属警示柱"
+        },
+        {
+          "id": 8,
+          "asset": "Bollard8_Bollard_Default_ICity",
+          "source": "builtin",
+          "desc": "白色石质粗矮圆柱(石墩)"
+        },
+        {
+          "id": 9,
+          "asset": "Bollard9_Bollard_Default_ICity",
+          "source": "builtin",
+          "desc": "金色立柱+红色挂绳的礼宾隔离栏"
+        }
+      ]
+    },
+    "road_material": {
+      "_type": "路面材质, sna_road_materials_type_='Road' + sna_road_materials_browser",
+      "_count": 8,
+      "items": [
+        {
+          "id": 1,
+          "asset": "ICity_Road 1 clean_Default",
+          "source": "builtin",
+          "desc": "干净深灰沥青路面，平滑"
+        },
+        {
+          "id": 2,
+          "asset": "ICity_Road 2 clean_Default",
+          "source": "builtin",
+          "desc": "干净灰色沥青路面"
+        },
+        {
+          "id": 3,
+          "asset": "ICity_Road 2 dirty 2_Default",
+          "source": "builtin",
+          "desc": "灰色沥青带脏污痕迹"
+        },
+        {
+          "id": 4,
+          "asset": "ICity_Road 3 clean_Default",
+          "source": "builtin",
+          "desc": "干净中灰沥青路面"
+        },
+        {
+          "id": 5,
+          "asset": "ICity_Road 4 clean_Default",
+          "source": "builtin",
+          "desc": "干净深灰细腻沥青路面(默认常用)"
+        },
+        {
+          "id": 6,
+          "asset": "ICity_Road 7 dirty_Default",
+          "source": "builtin",
+          "desc": "脏旧粗糙灰沥青"
+        },
+        {
+          "id": 7,
+          "asset": "ICity_Road 8 dirty_Default",
+          "source": "builtin",
+          "desc": "深色粗颗粒脏沥青"
+        },
+        {
+          "id": 8,
+          "asset": "ICity_Road 11 dirty_Default",
+          "source": "builtin",
+          "desc": "灰沥青带明显龟裂裂缝"
+        }
+      ]
+    },
+    "curb": {
+      "_type": "路缘材质, sna_road_materials_type_='Curb'",
+      "_count": 4,
+      "items": [
+        {
+          "id": 1,
+          "asset": "ICity_Curb grey_Default",
+          "source": "builtin",
+          "desc": "灰色路缘石"
+        },
+        {
+          "id": 2,
+          "asset": "ICity_Curb grey 2_Default",
+          "source": "builtin",
+          "desc": "灰色路缘石(另一灰调)"
+        },
+        {
+          "id": 3,
+          "asset": "ICity_Curb grey black_Default",
+          "source": "builtin",
+          "desc": "灰黑路缘石"
+        },
+        {
+          "id": 4,
+          "asset": "ICity_Curb yellow black_Default",
+          "source": "builtin",
+          "desc": "黄黑相间警示路缘"
+        }
+      ]
+    },
+    "sidewalk": {
+      "_type": "人行道材质, sna_road_materials_type_='Sidewalk'",
+      "_count": 5,
+      "items": [
+        {
+          "id": 1,
+          "asset": "ICity_Sidewalk 1_Default",
+          "source": "builtin",
+          "desc": "灰色小方砖人行道铺装"
+        },
+        {
+          "id": 2,
+          "asset": "ICity_Sidewalk 2_Default",
+          "source": "builtin",
+          "desc": "浅灰水泥人行道"
+        },
+        {
+          "id": 3,
+          "asset": "ICity_Sidewalk 3_Default",
+          "source": "builtin",
+          "desc": "米/棕色方砖人行道"
+        },
+        {
+          "id": 4,
+          "asset": "ICity_Sidewalk 4_Default",
+          "source": "builtin",
+          "desc": "灰白方格石板人行道"
+        },
+        {
+          "id": 5,
+          "asset": "ICity_Sidewalk 5_Default",
+          "source": "builtin",
+          "desc": "灰色石板铺装人行道"
+        }
+      ]
+    },
+    "building_preset": {
+      "_type": "建筑预设, sna_city_space_type='Presets' + sna_building_presets_browser",
+      "_count": 8,
+      "items": [
+        {
+          "id": 1,
+          "asset": "Court_Presets_ICity_Default",
+          "source": "builtin",
+          "_note": "法院",
+          "desc": "法院/政务楼，宽矮带柱廊，古典对称"
+        },
+        {
+          "id": 2,
+          "asset": "museum_Presets_ICity_Default",
+          "source": "builtin",
+          "_note": "博物馆, 注意 museum 小写",
+          "desc": "博物馆，绿色屋顶+柱廊，古典对称"
+        },
+        {
+          "id": 3,
+          "asset": "Skyscraper01_Presets_ICity_Default",
+          "source": "builtin",
+          "_note": "摩天楼, 共 01/02/03/04/06/08",
+          "desc": "方正高层塔楼+裙房"
+        },
+        {
+          "id": 4,
+          "asset": "Skyscraper02_Presets_ICity_Default",
+          "source": "builtin",
+          "desc": "现代办公楼，带屋顶绿化，中高层"
+        },
+        {
+          "id": 5,
+          "asset": "Skyscraper03_Presets_ICity_Default",
+          "source": "builtin",
+          "desc": "玻璃幕墙高塔+底部弧形景观平台"
+        },
+        {
+          "id": 6,
+          "asset": "Skyscraper04_Presets_ICity_Default",
+          "source": "builtin",
+          "desc": "细高尖塔(双塔)+景观平台"
+        },
+        {
+          "id": 7,
+          "asset": "Skyscraper06_Presets_ICity_Default",
+          "source": "builtin",
+          "desc": "蓝绿玻璃幕墙办公楼，中高层"
+        },
+        {
+          "id": 8,
+          "asset": "Skyscraper08_Presets_ICity_Default",
+          "source": "builtin",
+          "desc": "银白尖顶摩天楼"
+        }
+      ]
+    },
+    "landscape": {
+      "_type": "建筑景观地块, sna_landscape_browser",
+      "_count": 4,
+      "items": [
+        {
+          "id": 1,
+          "asset": "Default_Landscape 01_ICity",
+          "source": "builtin",
+          "desc": "建筑地块俯视布局图案A(绿化/地面纹样)"
+        },
+        {
+          "id": 2,
+          "asset": "Default_Landscape 02_ICity",
+          "source": "builtin",
+          "desc": "建筑地块俯视布局图案B"
+        },
+        {
+          "id": 3,
+          "asset": "Default_Landscape 03_ICity",
+          "source": "builtin",
+          "desc": "建筑地块俯视布局图案C(环形)"
+        },
+        {
+          "id": 4,
+          "asset": "Default_Landscape 04_ICity",
+          "source": "builtin",
+          "desc": "建筑地块俯视布局图案D"
+        }
+      ]
+    },
+    "park": {
+      "_type": "公园地块, sna_city_space_type='Park' + sna_park_browser",
+      "_count": 4,
+      "items": [
+        {
+          "id": 1,
+          "asset": "Default_Park 01_ICity",
+          "source": "builtin",
+          "desc": "公园地块俯视布局A(绿地+路径)"
+        },
+        {
+          "id": 2,
+          "asset": "Default_Park 02_ICity",
+          "source": "builtin",
+          "desc": "公园地块俯视布局B"
+        },
+        {
+          "id": 3,
+          "asset": "Default_Park 03_ICity",
+          "source": "builtin",
+          "desc": "公园地块俯视布局C"
+        },
+        {
+          "id": 4,
+          "asset": "Default_Park 04_ICity",
+          "source": "builtin",
+          "desc": "公园地块俯视布局D"
+        }
+      ]
+    }
+  },
+  "catalog_scene": {
+    "_note": "场景维度(队友 smart_city 扩展)。模板的 scene 块=具体参数；LLM 输出 档位/枚举，由插件按 levels 换算成数值。",
+    "traffic": {
+      "_op": "icity.generate_traffic",
+      "_settings": "scene.icity_traffic_settings",
+      "levels": {
+        "car_count": {
+          "none": 0,
+          "low": 3,
+          "medium": 10,
+          "high": 24,
+          "max": 40
+        },
+        "taxi_count": {
+          "none": 0,
+          "low": 1,
+          "medium": 4,
+          "high": 10,
+          "max": 20
+        },
+        "bus_count": {
+          "none": 0,
+          "low": 1,
+          "medium": 3,
+          "high": 6,
+          "max": 10
+        }
+      },
+      "ranges": {
+        "car_count": [
+          0,
+          60
+        ],
+        "taxi_count": [
+          0,
+          30
+        ],
+        "bus_count": [
+          0,
+          12
+        ]
+      },
+      "desc": "车流量。车水马龙/拥堵/繁华=high；正常=medium；车少/宁静=low；明确去掉车/无车/步行街=none(清空)；没提到=null。"
+    },
+    "pedestrian": {
+      "_op": "icity.generate_pedestrians",
+      "_settings": "scene.icity_pedestrian_settings",
+      "levels": {
+        "walker_count": {
+          "none": 0,
+          "low": 6,
+          "medium": 18,
+          "high": 40,
+          "max": 80
+        },
+        "idle_count": {
+          "none": 0,
+          "low": 3,
+          "medium": 10,
+          "high": 24,
+          "max": 50
+        }
+      },
+      "ranges": {
+        "walker_count": [
+          0,
+          200
+        ],
+        "idle_count": [
+          0,
+          120
+        ]
+      },
+      "desc": "人流量。很多人/人潮/熙熙攘攘=high；正常=medium；人少=low；明确去掉人/没有人=none(清空)；没提到=null。"
+    },
+    "ecology": {
+      "_op": "icity.add_ecology_plot",
+      "_settings": "scene.icity_ecology_settings",
+      "modes": {
+        "LAKE_RING": "有湖有山/湖光山色/滨水/湖泊环山",
+        "MOUNTAIN_ONLY": "群山/山地/只有山没有水",
+        "RIVER_VALLEY": "河流/河谷/蜿蜒的河/两岸青山",
+        "NONE": "无山无水/纯市区"
+      },
+      "intensity": {
+        "mountain_height": {
+          "low": 8,
+          "medium": 18,
+          "high": 40
+        },
+        "lake_radius": {
+          "low": 12,
+          "medium": 22,
+          "high": 36
+        },
+        "boat_count": {
+          "low": 1,
+          "medium": 3,
+          "high": 5
+        }
+      },
+      "desc": "湖+山=LAKE_RING；只山=MOUNTAIN_ONLY；河/河谷=RIVER_VALLEY；明确要去掉山/湖/河=NONE(清空已有生态)；没提到自然景观=null(保持不变)。"
+    },
+    "surface": {
+      "_op": "icity.apply_asset_surface",
+      "_settings": "scene.icity_asset_settings",
+      "styles": {
+        "ASPHALT_MARKED": "带车道标线的城市沥青主干道",
+        "CONCRETE_BOULEVARD": "宽阔混凝土林荫大道/广场地面",
+        "BOARDWALK_WARM": "暖色木质步道(滨海/公园栈道)"
+      },
+      "desc": "主干道/车道线->ASPHALT_MARKED；广场/大道->CONCRETE_BOULEVARD；海边/木栈道->BOARDWALK_WARM。"
+    },
+    "roadside": {
+      "_op": "icity.generate_roadside_assets",
+      "_settings": "scene.icity_asset_settings",
+      "styles": {
+        "MIXED": "混合",
+        "PLANTER": "花箱绿植",
+        "BOLLARD": "隔离柱",
+        "BENCH": "长椅",
+        "BUS_STOP": "公交站牌"
+      },
+      "desc": "(主要由模板用)绿化/花箱->PLANTER；公交->BUS_STOP；否则 MIXED。"
+    }
+  }
+}

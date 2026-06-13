@@ -1,0 +1,7 @@
+# Generated test reports (keep the tooling, not the run output).
+test-reports/
+
+# Python caches
+__pycache__/
+*.py[cod]
+*.prof

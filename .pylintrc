@@ -1,0 +1,41 @@
+# Pylint configuration for the Smart City iCity extension.
+# Generated as a team baseline (see the "代码静态检查" lecture). Commit this file
+# so everyone runs the same rules; tighten it over time rather than all at once.
+
+[MAIN]
+# bpy / mathutils are provided by Blender at runtime and are not installed in CI,
+# so do not try to import them during analysis.
+ignored-modules=bpy,bpy.props,bpy.types,mathutils,mathutils.noise
+# Generated/vendored areas we do not own.
+ignore-paths=^iCity/(?!smart_city/).*$
+
+[MESSAGES CONTROL]
+disable=
+    # bpy is unavailable in CI; import-error/no-name-in-module are false positives.
+    import-error,
+    no-name-in-module,
+    # Blender PropertyGroup fields look like class attrs without docstrings.
+    missing-class-docstring,
+    too-few-public-methods,
+    # Operators legitimately use a broad except to report failures to the UI.
+    broad-exception-caught,
+    # Local naming such as x/y/z, ui, etc. is fine for geometry code.
+    invalid-name,
+    # Allow the relative-then-absolute import fallback pattern used for Blender.
+    import-outside-toplevel
+
+[FORMAT]
+max-line-length=120
+
+[DESIGN]
+# Material/shader node builders genuinely need many locals and statements.
+max-args=8
+max-locals=30
+max-statements=80
+max-branches=20
+
+[BASIC]
+good-names=i,j,k,x,y,z,r,g,b,id,ax,_
+
+[REPORTS]
+output-format=colorized

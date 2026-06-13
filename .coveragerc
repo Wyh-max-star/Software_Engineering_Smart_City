@@ -1,0 +1,22 @@
+[run]
+source =
+    iCity/smart_city
+omit =
+    tests/*
+    */__init__.py
+branch = True
+parallel = True
+
+[report]
+precision = 1
+show_missing = True
+skip_empty = True
+exclude_lines =
+    pragma: no cover
+    if TYPE_CHECKING:
+
+[html]
+directory = test-reports/coverage-html
+
+[xml]
+output = test-reports/coverage.xml
